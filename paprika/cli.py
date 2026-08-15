@@ -105,6 +105,11 @@ def build_parser() -> argparse.ArgumentParser:
     pl = sub.add_parser("play", help="otevře WAV systémovým přehrávačem")
     pl.add_argument("wav", help="cesta k .wav")
 
+    ar = sub.add_parser(
+        "analyze-ref",
+        help="analyzuje externí nahrávku (mp3/wav) — tempo, key, akordy, dynamika")
+    ar.add_argument("audio", help="cesta k mp3/wav souboru")
+
     sub.add_parser("presets", help="vypíše dostupné presety a bicí")
     return p
 
@@ -135,6 +140,15 @@ def main(argv=None) -> int:
             print(song.show(bars=_parse_bars(args.bars), res=args.res))
         elif args.cmd == "play":
             _open_file(args.wav)
+        elif args.cmd == "analyze-ref":
+            from .reference import (ReferenceError, analyze_reference,
+                                    format_reference_report, load_reference_audio)
+            try:
+                samples, sr = load_reference_audio(args.audio)
+                rep = analyze_reference(samples, sr)
+            except ReferenceError as e:
+                raise CliError(str(e))
+            print(format_reference_report(rep, os.path.basename(args.audio)))
         elif args.cmd == "presets":
             from .drums import DRUM_CHARS
             from .presets import preset_names

@@ -21,6 +21,12 @@ pip install -r requirements.txt   # numpy, a nic dalšího
 WAV zápis jede přes stdlib `wave`. Filtry, reverb, oscilátory i limiter jsou
 napsané ručně v numpy.
 
+Volitelně, jen pro `analyze-ref` na ne-wav souborech (mp3, m4a, ...):
+
+```bash
+pip install imageio-ffmpeg
+```
+
 ## Rychlý start
 
 ```python
@@ -50,6 +56,7 @@ python -m paprika render songs/romantic.py --waveform   # + obálka mixu
 python -m paprika show   songs/romantic.py --bars 0:4   # jen ASCII, bez renderu
 python -m paprika play   output/romantic.wav            # systémový přehrávač
 python -m paprika presets                               # seznam nástrojů
+python -m paprika analyze-ref referencni.mp3             # tempo/key/akordy/dynamika
 ```
 
 Skladba je normální Python modul. `render` ho naimportuje a najde na úrovni
@@ -161,6 +168,37 @@ Onset noty je písmeno tónu (malé písmeno = křížek), držení `-`, ticho `
 Bicí kreslí svůj znak, akcent velkým písmenem. `--res 16` přepne na
 šestnáctiny.
 
+## Referenční analýza
+
+`analyze-ref` čte externí nahrávku (mp3/wav — cokoliv, co zvládne ffmpeg) a
+vypíše hrubý odhad tempa, tóniny, akordů po taktech a dynamiky, aby bylo
+podle čeho ručně napsat vlastní skladbu ve stejné náladě:
+
+```
+$ python -m paprika analyze-ref kyomei.mp3
+REFERENCE  kyomei.mp3
+audio    3:35  44100 Hz  mono
+
+TEMPO    ~92 BPM  (jistota: vysoká)
+KEY      D minor  (korelace 0.87, jistota: vysoká)
+
+DYNAMIKA  (energie po taktech, ~2.6s/takt)
+  ████████████████████████████████████████████████████████████▇▁
+
+AKORDY   (hrubý odhad z chroma vektorů, po taktech)
+  bar   1-8   Fm    F     F     F     Dm    Dm    Dm    Dm
+  ...
+```
+
+Detekce je čistě numpy (STFT, spectral-flux tempo, Krumhansl-Schmuckler
+key-fit, chroma template matching na akordy) — žádné ML, žádná separace
+nástrojů. Na polyfonním mixu (klavír+smyčce+bicí najednou) jsou akordy jen
+orientační, hlavně v hlasitých pasážích. Note-by-note transkripce se
+nedělá — to spolehlivě nejde bez ML.
+
+`.wav` čte stdlib `wave` bez závislostí navíc. Ostatní formáty (mp3, m4a, ...)
+potřebují `pip install imageio-ffmpeg` (lazy import, jen když se použije).
+
 ## Struktura
 
 ```
@@ -175,8 +213,9 @@ paprika/
   fx.py         Reverb, Delay, LowPass, HighPass, Saturate, Sidechain
   render.py     stopy -> stereo buffer -> WAV
   analyze.py    mix report + hudební warningy
+  reference.py  analýza externí nahrávky (tempo/key/akordy/dynamika)
   viz.py        ASCII piano roll + obálka mixu
-  cli.py        python -m paprika render|show|play|presets
+  cli.py        python -m paprika render|show|play|presets|analyze-ref
 ```
 
 Hranice jsou naschvál ostré: `render.py` neví nic o hudební teorii,

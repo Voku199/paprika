@@ -18,14 +18,14 @@ from scipy import signal
 
 from . import dsp
 from .filters import BP, HP, LP, Formant, onepole_hp, onepole_lp
-from .modulation import LFO, PitchEnv
+from .modulation import LFO, Ensemble, PitchEnv
 from .oscillators import (FM, Additive, Noise, Osc, Pluck, Pulse, Saw, Sine,
                           Square, SuperSaw, Tri)
 
 __all__ = [
     "Osc", "Sine", "Saw", "Square", "Tri", "Noise", "FM",
     "SuperSaw", "Pulse", "Pluck", "Additive",
-    "ADSR", "LP", "HP", "BP", "Formant", "LFO", "PitchEnv",
+    "ADSR", "LP", "HP", "BP", "Formant", "LFO", "PitchEnv", "Ensemble",
     "Patch", "midi_to_freq", "onepole_lp", "onepole_hp",
 ]
 
@@ -148,7 +148,9 @@ class Patch:
     - `pitch_env` — `PitchEnv`, nota začne jinde a dojede na svou výšku,
     - `vel_to_cutoff` — 0..1, silnější úhoz = jasnější zvuk, ne jen hlasitější,
     - `rr` — round-robin: kolik variant (fáze + pár centů) se střídá,
-    - `drift` — pomalé náhodné kolísání ladění v centech (analogový feel).
+    - `drift` — pomalé náhodné kolísání ladění v centech (analogový feel),
+    - `ensemble` — `Ensemble`: sekce několika rozladěných, rozmazaných
+      a rozprostřených kopií místo jednoho hlasu (výstup je stereo).
     """
 
     osc: list = field(default_factory=lambda: [Sine()])
@@ -162,6 +164,7 @@ class Patch:
     vel_to_cutoff: float = 0.0
     rr: int = 1
     drift: float = 0.0
+    ensemble: Ensemble | None = None
 
     @property
     def filters(self) -> list:
@@ -184,6 +187,7 @@ class Patch:
             self.vel_to_cutoff,
             int(self.rr),
             self.drift,
+            self.ensemble.key() if self.ensemble is not None else None,
         )
 
     def voice(self, freq: float, dur: float, vel: int = 100, sr: int = 44100,
@@ -221,15 +225,8 @@ class Patch:
         f = (_glide_curve(glide_path, glide_time, total_n, sr) if glide_path
              else float(freq))
         if moved:
-            f = np.broadcast_to(np.asarray(f, dtype=np.float64), (total_n,))                 * 2.0 ** (semis / 12.0)
-
-        parts = [o.amp * np.asarray(_call(o, "render", (f, total_n, sr),
-                                          {"phase": phase}), dtype=np.float32)
-                 for o in self.osc]
-        stereo = any(p.ndim == 2 for p in parts)
-        buf = np.zeros((total_n, 2) if stereo else total_n, dtype=np.float32)
-        for p in parts:
-            buf += p[:, None] if (stereo and p.ndim == 1) else p
+            f = np.broadcast_to(np.asarray(f, dtype=np.float64), (total_n,)) \
+                * 2.0 ** (semis / 12.0)
 
         env = self.adsr.render(gate_n, total_n, sr)
         amp_env = env
@@ -237,7 +234,40 @@ class Patch:
             trem = 1.0 - 0.5 * (self.tremolo.depth +
                                 self.tremolo.curve(total_n, sr, bpm))
             amp_env = (env * trem).astype(np.float32)
-        buf *= amp_env[:, None] if stereo else amp_env
+
+        def core(freq_curve, osc_phase):
+            """Oscilátory × obálka pro jednu kopii hlasu."""
+            parts = [o.amp * np.asarray(_call(o, "render", (freq_curve, total_n, sr),
+                                              {"phase": osc_phase}), dtype=np.float32)
+                     for o in self.osc]
+            is_stereo = any(p.ndim == 2 for p in parts)
+            sig = np.zeros((total_n, 2) if is_stereo else total_n, dtype=np.float32)
+            for p in parts:
+                sig += p[:, None] if (is_stereo and p.ndim == 1) else p
+            sig *= amp_env[:, None] if is_stereo else amp_env
+            return sig
+
+        if self.ensemble is None:
+            buf = core(f, phase)
+        else:
+            # sekce: kopie se sečtou do sterea, filtry pak běží jednou na součtu
+            layout = self.ensemble.layout(rr_index)
+            extra = int(round(max(0.0, self.ensemble.smear) * sr))
+            buf = np.zeros((total_n + extra, 2), dtype=np.float32)
+            for i, (cents, delay, pan) in enumerate(layout):
+                sig = core(f * 2.0 ** (cents / 1200.0),
+                           (phase + 0.37 * (rr_index * len(layout) + i)) % 1.0)
+                ang = (pan + 1.0) * math.pi / 4.0
+                gl, gr = math.cos(ang) * math.sqrt(2.0), math.sin(ang) * math.sqrt(2.0)
+                d = int(round(delay * sr))
+                if sig.ndim == 1:
+                    buf[d:d + total_n, 0] += sig * gl
+                    buf[d:d + total_n, 1] += sig * gr
+                else:
+                    buf[d:d + total_n, 0] += sig[:, 0] * min(1.0, gl)
+                    buf[d:d + total_n, 1] += sig[:, 1] * min(1.0, gr)
+            buf /= math.sqrt(len(layout))
+            env = np.concatenate([env, np.zeros(extra, dtype=np.float32)])
 
         tv = vel if tone_vel is None else tone_vel
         scale = (2.0 ** (self.vel_to_cutoff * 3.0 * (tv / 127.0 - 0.75))

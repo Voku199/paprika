@@ -12,7 +12,7 @@ import numpy as np
 
 from . import dsp
 
-__all__ = ["LFO", "PitchEnv"]
+__all__ = ["LFO", "PitchEnv", "Ensemble"]
 
 PITCH_CURVES = ("exp", "lin")
 
@@ -89,3 +89,42 @@ class PitchEnv:
 
     def key(self) -> tuple:
         return ("PitchEnv", self.semi, self.time, self.shape)
+
+
+@dataclass
+class Ensemble:
+    """Sekce místo sólisty: `voices` kopií téhož hlasu, každá trochu jinak
+    naladěná (±`detune` centů), s jinak rozmazaným nástupem (0..`smear` s)
+    a jinde ve stereu (±`spread`).
+
+    Tohle odlišuje smyčce, sbor nebo žesťovou sekci od „čipového“ tónu:
+    reálný orchestr nikdy nezačne ve stejném vzorku ve stejném ladění.
+    Rozložení je deterministické podle `seed` a round-robin indexu noty.
+    """
+
+    voices: int = 4
+    detune: float = 10.0
+    spread: float = 0.8
+    smear: float = 0.02
+    seed: int = 0
+
+    def __post_init__(self):
+        if int(self.voices) < 1:
+            raise ValueError(f"Ensemble: voices musí být aspoň 1, ne {self.voices}")
+
+    def layout(self, rr_index: int = 0) -> list[tuple[float, float, float]]:
+        """Pro každou kopii (rozladění v centech, zpoždění v s, pan -1..1)."""
+        v = int(self.voices)
+        if v == 1:
+            return [(0.0, 0.0, 0.0)]
+        rng = np.random.default_rng(self.seed * 1009 + int(rr_index))
+        cents = np.linspace(-self.detune, self.detune, v) \
+            + rng.normal(0.0, self.detune * 0.15, v)
+        delays = rng.uniform(0.0, max(0.0, self.smear), v)
+        delays -= delays.min()
+        pans = rng.permutation(np.linspace(-self.spread, self.spread, v))
+        return [(float(c), float(d), float(p)) for c, d, p in zip(cents, delays, pans)]
+
+    def key(self) -> tuple:
+        return ("Ensemble", int(self.voices), self.detune, self.spread, self.smear,
+                self.seed)

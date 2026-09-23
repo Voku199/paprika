@@ -31,7 +31,7 @@ from .fx_lofi import BitCrush, Tape
 from .fx_space import Chorus, Hall, Width
 from .kits import kit_names
 from .note import DEFAULT_VELOCITY, Note, NoteLengthError, NoteParseError, parse
-from .patch import (ADSR, BP, FM, HP, LFO, LP, Additive, Formant, Noise, Osc,
+from .patch import (ADSR, BP, FM, HP, LFO, LP, Additive, Ensemble, Formant, Noise, Osc,
                     Patch, PitchEnv, Pluck, Pulse, Saw, Sine, Square, SuperSaw,
                     Tri, midi_to_freq)
 from .presets import (PRESET_TAGS, PRESETS, preset, preset_fx, preset_names,
@@ -54,7 +54,8 @@ __all__ = [
     # zvuk
     "Patch", "Osc", "Sine", "Saw", "Square", "Tri", "Noise", "FM",
     "SuperSaw", "Pulse", "Pluck", "Additive",
-    "ADSR", "LP", "HP", "BP", "Formant", "LFO", "PitchEnv", "midi_to_freq",
+    "ADSR", "LP", "HP", "BP", "Formant", "LFO", "PitchEnv", "Ensemble",
+    "midi_to_freq",
     "preset", "preset_names", "preset_fx", "presets_by_tag", "tag_names",
     "PRESETS", "PRESET_TAGS",
     # efekty

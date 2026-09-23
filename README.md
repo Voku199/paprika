@@ -9,17 +9,20 @@ Paprika není generátor hudby. Melodii, harmonii a strukturu skládáš ty (neb
 AI). Paprika dává nástroje: hudební teorii, syntézu zvuku, efekty, mix
 a zpětnou vazbu.
 
-**Vědomé omezení:** čistá syntéza zní synteticky. Synthwave, lo-fi, chiptune,
-ambient a elektronické piano sednou. Koncertní křídlo nebo živé smyčce ne.
+**Engine v2** (stereo, modulace, glide, automatizace, sběrnice, konvoluční
+hall, sbor, bicí sady, cinematic SFX, 37 presetů) míří na temný cinematic /
+dark-pop soundtrack ve stylu Arcane. Pořád je to čistá syntéza — orchestr
+zní „syntetický orchestr“, ne nahrávka; realistické smyčce přinese až
+sampler (plánovaný podprojekt).
 
 ## Instalace
 
 ```bash
-pip install -r requirements.txt   # numpy, a nic dalšího
+pip install -r requirements.txt   # numpy + scipy
 ```
 
-WAV zápis jede přes stdlib `wave`. Filtry, reverb, oscilátory i limiter jsou
-napsané ručně v numpy.
+WAV zápis jede přes stdlib `wave`. Oscilátory, obálky, efekty i limiter jsou
+napsané ručně; scipy dává jen rychlé IIR filtry (`lfilter`) a FFT konvoluci.
 
 Volitelně, jen pro `analyze-ref` na ne-wav souborech (mp3, m4a, ...):
 
@@ -71,6 +74,7 @@ C#4:1.5        nota, oktáva, dvojtečka, délka v beatech
 (C4 E4 G4):2   akord — celý naráz
 _:2            pauza
 ~:1            prodlouží předchozí notu
+>G1:1          glide — nota doklouže z výšky předchozí noty (808, slide)
 C4:1@110       volitelná velocity
 |              oddělovač taktů a zároveň kontrola délek
 ```
@@ -93,19 +97,54 @@ podle zvuku.
 | `.clear(bars=)` | smaže rozsah taktů |
 | `.transpose(semitones)` | posune celou stopu |
 | `.repeat(bars, times)` | zkopíruje rozsah taktů dál po timeline |
+| `.automate(cíl, [(takt, hodnota)], curve)` | změna v čase: `vol`, `pan`, `<efekt>.<param>`; křivky `lin`, `exp`, `s`, `step` |
+| `.to(bus)` | pošle stopu do sběrnice |
 
-`s.drums()` vrací stopu s `.pattern(str, bars=(od, do), rate=1/16)`.
+`s.track(nástroj, vol, pan, mono=, glide=, fx=)` — `mono=True` slije
+navazující noty do jednoho hlasu (legato), `glide` je sklouznutí v beatech;
+opakovaná nota stejné výšky se znovu udeří. `fx="default"` připojí
+doporučený řetěz presetu (808 → saturace, sbor → katedrála).
+
+`s.drums(kit="trap")` vrací stopu s `.pattern(str, bars=(od, do), rate=1/16,
+swing=0)` a `.roll("h", bar, beat, beats, rate=1/32, vel=(60, 110))`.
+
+`s.sfx()` vrací stopu cinematic efektů: `.riser(to_bar, bars, kind)` skončí
+přesně na začátku taktu, `.impact(bar)`, `.braam(bar, "D2", bars)`,
+`.subdrop(bar)`, `.reverse_swell(to_bar, beats)`, `.whoosh(bar, beats)`.
+
+`s.bus("drums")` je sběrnice s vlastním fx řetězem a automatizací;
+`s.master` je poslední řetěz před limiterem.
+
+```python
+bus = s.bus("drums").fx(Compressor(-16, 4))
+kick.to(bus); hats.to(bus)
+pad.fx(Sidechain("drums", amount=0.4))                  # pumpuje od busu
+lead.fx(LowPass(300, res=0.5)).automate("lowpass.cutoff",
+                                        [(8, 300), (16, 8000)], "exp")
+s.master.automate("vol", [(0, 1), (15.875, 0), (16, 1)], "step")  # díra před dropem
+```
 
 ## Nástroje
 
-Presety: `epiano`, `warmpad`, `subbass`, `pluck`, `lead`, `strings`, `bell`,
-`organ`.
+Presety podle tagů (`python -m paprika presets --tag choir`):
+
+| Tag | Presety |
+|---|---|
+| classic | `epiano`, `warmpad`, `subbass`, `pluck`, `lead`, `strings`, `bell`, `organ` |
+| orchestral | `strings_ens`, `strings_short`, `pizz`, `cello_solo`, `brass_section`, `horn_swell`, `harp`, `timpani_tone` |
+| choir | `choir_ooh`, `choir_aah`, `choir_mm`, `vox_chop` |
+| keys | `felt_piano`, `toy_piano`, `music_box`, `celesta` |
+| darkpop | `808`, `reese`, `dark_pluck`, `detuned_lead` |
+| electronic | `supersaw`, `acid`, `string_stab`, `pwm_pad`, `air_pad` |
+| lofi | `lofi_keys`, `glass_pad`, `shimmer_pad`, `round_bass` |
 
 Bicí: `k` kick, `s` snare, `h` hi-hat, `o` open hat, `c` clap, `t` tom,
-`r` ride. Všechny syntetizované. V pattern stringu je jeden znak jeden krok
-(výchozí šestnáctina), tečka nebo podtržítko je pauza a **velké písmeno
-znamená akcent** — `"k...s...k...s..K"` má poslední kopák hlasitější.
-Víc řádků v jednom stringu se navrství na sebe.
+`r` ride, `x` rim, `b` boom (taiko), `y` shaker, `p` perc. Jak zní, určuje
+sada: `classic`, `trap`, `cinematic`, `breakbeat`, `industrial`, `lofi`.
+V pattern stringu je jeden znak jeden krok (výchozí šestnáctina), tečka nebo
+podtržítko je pauza a **velké písmeno znamená akcent** —
+`"k...s...k...s..K"` má poslední kopák hlasitější. Víc řádků v jednom
+stringu se navrství na sebe.
 
 Vlastní patch:
 
@@ -118,13 +157,29 @@ moje = s.track(Patch(
     filter=LP(2200, env=0.6)))
 ```
 
-Oscilátory: `Sine`, `Saw`, `Square`, `Tri`, `Noise`, `FM`. První argument je
-poměr k základní frekvenci noty, takže `Sine(2.01)` je mírně rozladěná
-oktáva — základní trik pro živější zvuk.
+Oscilátory: `Sine`, `Saw`, `Square`, `Tri`, `Noise(color=white|pink|brown)`,
+`FM`, `SuperSaw(voices, detune, spread)` (unison do stran), `Pulse(width,
+pwm=LFO)`, `Pluck(decay, bright)` (Karplus-Strong struna), `Additive(partials,
+inharm)` (piano, music box, zvony). První argument je poměr k základní
+frekvenci noty, takže `Sine(2.01)` je mírně rozladěná oktáva.
 
-Efekty: `Reverb(room, mix, damp)`, `Delay(time, fb, mix)` (tempo-synchronní,
-`time` je zlomek celé noty), `LowPass`, `HighPass`, `Saturate(drive)`,
-`Sidechain(source_track, amount)`.
+Filtry v patchi: `LP`/`HP(cutoff, env, poles, res, lfo)` (rezonance, LFO na
+cutoff), `BP`, `Formant(vowel, voice, morph)` — samohlásky a–u pro sbor;
+`filter` smí být seznam.
+
+Modulace v patchi: `vibrato=LFO(5, 0.1, delay=0.3)` (půltóny, nástup se
+zpožděním), `tremolo=LFO`, `pitch_env=PitchEnv(semi, time)`,
+`vel_to_cutoff` (silnější úhoz = jasnější), `rr` (round-robin varianty),
+`drift` (analogové kolísání v centech).
+
+Efekty: `Reverb(room, mix, damp, width)` (stereo Freeverb),
+`Hall(preset, size, mix)` (konvoluce: room / plate / hall / cathedral),
+`Delay(time, fb, mix, ping_pong, tone)`, `LowPass`/`HighPass(cutoff, poles,
+res)`, `Filter(mode, cutoff, res)`, `EQ(low, mid, high)`, `Saturate(drive)`,
+`Compressor(threshold, ratio, attack, release, makeup)`, `Gate(pattern,
+rate, depth)` (trance gate), `Chorus`, `Width(amount)`, `BitCrush(bits,
+downsample)`, `Tape(wow, flutter, drive, hiss)`, `Sidechain(zdroj, amount)`
+— zdroj je stopa nebo bus. Každý efekt bere `name=` pro automatizaci.
 
 ## Zpětná vazba
 
@@ -152,6 +207,11 @@ Pravidla warningů:
 | robotická dynamika | směrodatná odchylka velocity ve stopě je nula |
 | ostrá disonance | malá sekunda mezi současně znějícími notami pod MIDI 48 |
 | díra v aranži | stopa mlčí 4+ takty uprostřed skladby |
+| mono kompatibilita | korelace L/R stopy klesne pod 0 — v mono se vyruší |
+| statický zvuk | melodická stopa přes 16+ taktů bez modulace, automatizace i humanize |
+
+Maskování vypisuje jen čtyři nejdelší překryvy a tiché takty (pod -80 dBFS)
+ignoruje. Řádek `STEREO` ukazuje šířku mixu a korelaci kanálů.
 
 ASCII náhled (`show`) kreslí timeline bez renderu — rychlá kontrola struktury:
 
@@ -203,15 +263,25 @@ potřebují `pip install imageio-ffmpeg` (lazy import, jen když se použije).
 
 ```
 paprika/
-  __init__.py   veřejné API
-  song.py       Song, Track, DrumTrack, Clip, timeline
-  note.py       Note a parsing notačních řetězců
-  theory.py     stupnice, akordy, obraty, arpeggia
-  patch.py      oscilátory, ADSR, filtry, Patch.voice()
-  presets.py    8 hotových nástrojů
-  drums.py      syntetizované bicí + pattern stringy
-  fx.py         Reverb, Delay, LowPass, HighPass, Saturate, Sidechain
-  render.py     stopy -> stereo buffer -> WAV
+  __init__.py     veřejné API
+  song.py         Song, Track, DrumTrack, SfxTrack, Bus, Clip, timeline
+  note.py         Note a parsing notačních řetězců (včetně glide `>`)
+  theory.py       stupnice, akordy, obraty, arpeggia
+  dsp.py          biquad filtry, LFO, šum, Karplus-Strong, syntetická IR
+  oscillators.py  Sine … FM, SuperSaw, Pulse, Pluck, Additive
+  filters.py      LP, HP, BP, Formant
+  modulation.py   LFO, PitchEnv
+  patch.py        ADSR, Patch.voice() (modulace, glide, round-robin)
+  automation.py   křivky automatizace a jejich cíle
+  presets.py      37 nástrojů s tagy, výchozí fx
+  drums.py        pattern stringy, render úderů
+  kits.py         bicí sady (classic, trap, cinematic, ...)
+  sfx.py          riser, impact, braam, subdrop, reverse swell, whoosh
+  fx.py           Reverb, Delay, LowPass, HighPass, Filter, EQ, Saturate, Sidechain
+  fx_space.py     Hall, Chorus, Width
+  fx_dyn.py       Compressor, Gate
+  fx_lofi.py      BitCrush, Tape
+  render.py       stopy -> busy -> master -> stereo buffer -> WAV
   analyze.py    mix report + hudební warningy
   reference.py  analýza externí nahrávky (tempo/key/akordy/dynamika)
   viz.py        ASCII piano roll + obálka mixu
@@ -227,9 +297,14 @@ model. Noty žijí v beatech, ne v sekundách — změna BPM je jeden parametr.
 ```bash
 python -m pytest tests/
 python -m unittest discover tests
+PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py   # vyrenderuje všechny songy
 ```
 
-## Co v1 neobsahuje
+`songs/v2_showcase.py` je poslechová ukázka všech novinek v2.
 
-MCP server, MP3 export, automatizační křivky parametrů v čase, změny tempa
-uprostřed skladby, import/export MIDI, stereo šířku a chorus.
+## Co v2 neobsahuje
+
+Sampler (SFZ knihovny), export do hry (smyčky, stemy, vrstvy intenzity,
+stingery), žánrové style packy a Claude Code skill `/paprika` — to jsou další
+podprojekty. Dál chybí zpěv, MIDI, změny tempa uprostřed skladby a
+automatizace na úrovni jednotlivé noty.

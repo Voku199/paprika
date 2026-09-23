@@ -5,8 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 Paprika is a pure-Python music library: write a song as a Python module, render
-it to WAV with hand-written synthesis. Only dependency is `numpy` (WAV via stdlib
-`wave`; oscillators, filters, reverb, limiter all written by hand).
+it to WAV with hand-written synthesis. Dependencies are `numpy` and `scipy`
+(scipy only for `lfilter` IIR filters and FFT convolution; WAV via stdlib
+`wave`; oscillators, envelopes, effects, limiter all written by hand).
+
+Current goal (engine v2, 2026-09): varied instrumental Arcane-style soundtrack
+for a Unity game. Specs live in `docs/superpowers/specs/`; engine v2 is done,
+next sub-projects are style packs + `/paprika` skill, game export (loops,
+stems, stingers), SFZ sampler.
 
 The library is *not* a music generator — melody, harmony and structure are
 written by the author (usually the AI). Paprika supplies theory, synthesis, FX,
@@ -16,13 +22,14 @@ verification tool after every change to a song.
 
 `README.md` documents the user-facing API (note notation, track methods,
 presets, drum chars, warning rules). Read it before writing a song file.
-`docs/superpowers/specs/2026-08-12-paprika-design.md` records the design
-decisions and why v1 stops where it does.
+`docs/superpowers/specs/2026-08-12-paprika-design.md` records the v1 design,
+`2026-09-23-engine-v2-design.md` the v2 engine. `songs/v2_showcase.py`
+exercises every v2 feature.
 
 ## Commands
 
 ```bash
-pip install -r requirements.txt                          # numpy only
+pip install -r requirements.txt                          # numpy + scipy
 
 python -m paprika render songs/romantic.py               # WAV + report
 python -m paprika render songs/x.py --bars 0:8           # fast preview slice
@@ -31,7 +38,8 @@ python -m paprika show   songs/x.py --bars 12:16 --res 16  # ASCII roll, no rend
 python -m paprika play   output/x.wav
 python -m paprika presets
 
-python -m pytest tests/                                  # 101 tests, ~6 s
+python -m pytest tests/                                  # ~285 tests, ~15 s
+PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py     # renders every song, ~1 min
 python -m pytest tests/test_render.py::TestLimiter::test_tames_overs
 python -m unittest discover tests                        # pytest not required
 ```
@@ -56,12 +64,15 @@ the song path.
 Layer boundaries are deliberately sharp — keep them:
 
 - `theory.py` — MIDI ints only (C4 = 60). Knows nothing about audio.
-- `note.py` — parses notation strings into `Note` (pitch, start_beat, dur_beats, velocity).
-- `song.py` — `Song` / `Track` / `DrumTrack` / `Clip`. Pure data model, no files, no CLI.
-- `patch.py` — one note → one mono `voice` buffer (oscillators, ADSR, filters).
-- `presets.py`, `drums.py` — instruments; drums are synthesized, no samples.
-- `fx.py` — track-level effects.
-- `render.py` — model → stereo buffer → WAV. Knows no music theory.
+- `note.py` — parses notation strings into `Note` (pitch, start_beat, dur_beats, velocity, glide).
+- `song.py` — `Song` / `Track` / `DrumTrack` / `SfxTrack` / `Bus` / `Clip`. Pure data model, no files, no CLI.
+- `dsp.py` — pure array DSP (biquads, time-varying filters, LFO, noise, Karplus-Strong, synthetic IR, polyBLEP). No model, no theory.
+- `oscillators.py`, `filters.py`, `modulation.py` — building blocks of a patch.
+- `patch.py` — `ADSR` + `Patch.voice()`: one phrase → one mono `(n,)` or stereo `(n, 2)` buffer; re-exports the building blocks.
+- `presets.py`, `kits.py`, `sfx.py` — instruments, drum kits, cinematic SFX; all synthesized, no samples.
+- `fx.py`, `fx_space.py`, `fx_dyn.py`, `fx_lofi.py` — track/bus/master effects.
+- `automation.py` — automation curves and target resolution.
+- `render.py` — model → stereo buffers → buses → master → WAV. Knows no music theory.
 - `analyze.py` — reads only the finished buffer + the data model.
 - `viz.py`, `cli.py` — ASCII output, argparse.
 
@@ -71,37 +82,60 @@ absolute on the timeline; `Note.start_beat` is relative to its clip.
 
 ### Render pipeline (`render_song`)
 
-1. `_tail_seconds` — buffer length = song span + max(fx tail + ADSR release).
-   Any effect that rings out **must** report `tail(ctx)` or it gets truncated.
-2. Two passes over tracks: normal tracks first, then tracks whose fx chain has
-   `needs_tracks = True` (only `Sidechain`), which read `ctx.track_buffers`.
-3. `mix` — equal-power pan + vol → `(n, 2) float32`.
-4. `limiter` — tanh soft limiter above −1 dBFS; `raw_peak` is captured *before*
-   it so `analyze` can still report clipping.
-5. `_trim` trailing silence, but never below the song's own length.
+1. `_tail_seconds` — buffer length = song span + max(fx tail + ADSR release)
+   + bus/master fx tails. Any effect that rings out **must** report
+   `tail(ctx)` or it gets truncated.
+2. Dependency loop over tracks and buses: a track waits for its `Sidechain`
+   sources, a bus for its member tracks. No progress in a round →
+   `RuntimeError` naming the cycle. `ctx.track_buffers` holds finished tracks
+   (post-fx, pre-vol) and buses.
+3. Per track: `_phrases` (mono legato / `>` glide) → `Patch.voice` → stereo
+   `(n, 2)` buffer → fx chain with automation curves set via
+   `fx.set_curve()` and cleared afterwards.
+4. Tracks get vol/pan (equal-power pan, automatable); bus members are summed
+   into the bus, bus fx run, bus vol/pan is a **balance** law (pan 0 = unity).
+5. Master fx + master automation, then `limiter` — tanh soft limiter above
+   −1 dBFS; `raw_peak` is captured *before* it so `analyze` can report clipping.
+6. `_trim` trailing silence, but never below the song's own length.
+
+Everything stereo is `(n, 2)`. A mono-only effect implements
+`process_mono(x, ctx)`; the base `Fx.process` runs it per channel. Effects
+that handle stereo override `process` and must accept `(n,)` too.
 
 ### Voice cache
 
-`render_track` caches synthesized voices by `(patch.key(), freq, dur)`. Any new
-`Osc`, filter, or `Patch` field **must** be included in the corresponding
-`key()`, otherwise two different sounds collide in the cache and one is silently
-rendered as the other.
+`render_track` caches synthesized voices by `(patch.key(), freq, dur, rr_index,
+tone_vel, glide_path, glide_time, bpm)`. Any new `Osc`, filter, modulation, or
+`Patch` field **must** be included in the corresponding `key()`, otherwise two
+different sounds collide in the cache and one is silently rendered as the
+other (`tests/test_modulation.py::test_every_field_changes_key` guards this).
 
 ### DrumTrack is a special case
 
 `DrumTrack` stores `DrumHit`s in `.hits`, not notes — its `all_notes()` returns
 `[]` on purpose. Any code walking tracks (analysis, viz, render) must branch on
 `isinstance(t, DrumTrack)`. Drum hits are rendered at velocity 127 once and
-cached in `drums._CACHE`, then scaled per hit.
+cached in `drums._CACHE` keyed `(kit, name, sr)`, then scaled per hit.
+`SfxTrack` subclasses `DrumTrack` (hits are `SfxHit` with `params`,
+`dur_beats`); check `SfxTrack` **before** `DrumTrack` where they differ.
+
+Mono tracks (`mono=True`): touching notes of a different pitch (or marked `>`)
+merge into one voice; same pitch without `>` retriggers (808 patterns).
 
 ## Extending
 
-- **New preset** — add a `_name() -> Patch` factory in `presets.py` and register
-  it in `PRESETS`. `preset()` returns a fresh instance each call, so per-track
-  tweaks don't leak.
+- **New preset** — add a `_name() -> Patch` factory in `presets.py`, register
+  it in `PRESETS` and `_TAGGED`; optional `PRESET_DEFAULTS` (mono/glide) and
+  `_default_fx`. `preset()` returns a fresh instance each call, so per-track
+  tweaks don't leak. `tests/test_presets.py` checks level (< 1.0 at vel 127,
+  55–880 Hz) and that every new preset differs spectrally from the others.
+- **New drum kit** — a dict of `name -> f(sr)` in `kits.py`, registered in
+  `KITS`; missing instruments fall back to `classic`.
 - **New oscillator / filter** — subclass `Osc` (or match the `LP`/`HP` shape:
   `apply(x, sr, env)`), implement `key()`, export from `__init__.py`.
-- **New effect** — subclass `Fx` with `process(buf, ctx)` and `tail(ctx)`.
+- **New effect** — subclass `Fx` with `process_mono(x, ctx)` (or a stereo-aware
+  `process(buf, ctx)`) and `tail(ctx)`; list automatable params in
+  `AUTOMATABLE` and read them via `self.value(param)`; accept `name=`.
   Feedback structures are computed **block-wise by delay length** (see
   `_feedback_delay`, `_allpass`) so recursion stays vectorized. Do not write
   per-sample Python loops; the only accepted one is the variable-cutoff branch
@@ -109,7 +143,7 @@ cached in `drums._CACHE`, then scaled per hit.
 - **New warning rule** — a `_rule(song, ..., warns)` function in `analyze.py`
   appending `Warning_("WARN"|"INFO", where, text)`, wired into `warnings_for`.
   Rules must cap their output (existing ones stop after 3–4 hits) so the report
-  stays readable.
+  stays readable. Ignore near-silent bars (convolution leaves ~1e-17 noise).
 - `__init__.py` re-exports the public API explicitly; anything user-facing goes
   in both the imports and `__all__`.
 

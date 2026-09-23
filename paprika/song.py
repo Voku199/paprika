@@ -9,6 +9,8 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from . import drums as _drums
 from . import note as _note
 from . import theory
@@ -227,8 +229,13 @@ class DrumTrack(Track):
     """Stopa bicích. Místo pitchů drží jména nástrojů z pattern stringu."""
 
     def __init__(self, song: "Song", name: str = "drums", vol: float = 0.6,
-                 pan: float = 0.0):
+                 pan: float = 0.0, kit: str = "classic"):
+        from .kits import kit_names
+        if kit not in kit_names():
+            raise KeyError(f"neznámá bicí sada {kit!r}; k dispozici: "
+                           f"{', '.join(kit_names())}")
         super().__init__(song, Patch(name="drums"), name, vol, pan, chromatic=True)
+        self.kit = kit
         self.hits: list[_drums.DrumHit] = []
 
     def __len__(self) -> int:
@@ -238,8 +245,12 @@ class DrumTrack(Track):
         return f"<DrumTrack {self.name} hits={len(self.hits)}>"
 
     def pattern(self, text: str, bars=(0, 1), rate: float = 1 / 16,
-                vel: float = 1.0):
-        """Zopakuje pattern přes rozsah taktů. Jeden znak = jeden krok."""
+                vel: float = 1.0, swing: float = 0.0):
+        """Zopakuje pattern přes rozsah taktů. Jeden znak = jeden krok.
+
+        `swing` 0..1 posune každý sudý krok (2., 4., ...) o tenhle podíl
+        kroku dozadu — shuffle / groove místo strojové mřížky.
+        """
         lo, hi = (bars if isinstance(bars, (tuple, list)) else (bars, bars + 1))
         step = float(rate) * self.bpb
         if step <= 0:
@@ -248,6 +259,10 @@ class DrumTrack(Track):
         raw = _drums.parse_pattern(text, step_beats=step, start_beat=0.0)
         if not raw:
             return self
+        if swing:
+            for h in raw:
+                if int(round(h.start_beat / step)) % 2 == 1:
+                    h.start_beat += float(swing) * step
         length_steps = _drums.pattern_steps(text)
         # kratší pattern se dopočítá pauzami do konce taktu, delší běží dál
         span_bars = max(1, -(-length_steps // steps_per_bar))
@@ -262,6 +277,34 @@ class DrumTrack(Track):
                 self.hits.append(_drums.DrumHit(
                     h.name, start, int(max(1, min(127, round(h.velocity * vel))))))
             bar += span_bars if span_beats else 1
+        return self
+
+    def _resolve(self, name: str) -> str:
+        if name in _drums.drum_names():
+            return name
+        full = _drums.DRUM_CHARS.get(str(name).lower()) if len(str(name)) == 1 else None
+        if full is None:
+            raise ValueError(f"neznámý bicí nástroj {name!r}; k dispozici: "
+                             f"{', '.join(_drums.drum_names())} nebo znaky "
+                             f"{''.join(sorted(_drums.DRUM_CHARS))}")
+        return full
+
+    def roll(self, name: str, bar: float = 0, beat: float = 0.0,
+             beats: float = 1.0, rate: float = 1 / 32, vel=(60, 110)):
+        """Víření: rychlé údery po `rate` přes `beats` beatů s rampou velocity.
+
+        Trap hi-hat roll: `roll("h", bar=7, beat=3, beats=1, rate=1/32)`.
+        """
+        full = self._resolve(name)
+        step = float(rate) * self.bpb
+        if step <= 0:
+            raise ValueError("rate musí být kladné")
+        count = max(1, int(round(float(beats) / step)))
+        lo, hi = (vel, vel) if np.isscalar(vel) else vel
+        start = self._bar_to_beat(bar) + beat
+        for i, v in enumerate(np.linspace(lo, hi, count)):
+            self.hits.append(_drums.DrumHit(full, start + i * step,
+                                            int(max(1, min(127, round(v))))))
         return self
 
     def hit(self, name: str, at: float, vel: int = 100):
@@ -409,10 +452,11 @@ class Song:
         self.tracks.append(t)
         return t
 
-    def drums(self, vol: float = 0.6, pan: float = 0.0,
-              name: str = "drums") -> DrumTrack:
-        """Přidá stopu bicích."""
-        t = DrumTrack(self, self._unique(name), vol, pan)
+    def drums(self, vol: float = 0.6, pan: float = 0.0, name: str = "drums",
+              kit: str = "classic") -> DrumTrack:
+        """Přidá stopu bicích. `kit`: classic, trap, cinematic, breakbeat,
+        industrial, lofi."""
+        t = DrumTrack(self, self._unique(name), vol, pan, kit=kit)
         self.tracks.append(t)
         return t
 

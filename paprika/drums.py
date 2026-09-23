@@ -3,15 +3,17 @@
 Znaky patternu::
 
     k  kick     s  snare    h  hi-hat   c  clap    t  tom
-    o  open hat r  ride     .  pauza    _  pauza
+    o  open hat r  ride     x  rim      b  boom    y  shaker
+    p  perc     .  pauza    _  pauza
+
+Jak který nástroj zní, určuje bicí sada (`kits.py`): stejný pattern zní
+v `trap` jako 808 a v `cinematic` jako orchestr s taiko.
 
 Velké písmeno = akcent (vyšší velocity). Jeden znak = jeden krok; výchozí
 krok je šestnáctina, tedy šestnáct znaků = jeden takt ve 4/4.
 """
 
 from __future__ import annotations
-
-import math
 
 import numpy as np
 
@@ -25,13 +27,15 @@ DRUM_CHARS = {
     "c": "clap",
     "t": "tom",
     "r": "ride",
+    "x": "rim",
+    "b": "boom",
+    "y": "shaker",
+    "p": "perc",
 }
 
 REST_CHARS = "._ -"
 ACCENT_VELOCITY = 118
 NORMAL_VELOCITY = 92
-
-TWO_PI = 2.0 * math.pi
 
 
 class DrumHit:
@@ -79,119 +83,26 @@ def pattern_steps(text: str) -> int:
 
 
 # --------------------------------------------------------------------------
-# syntéza
+# render
 # --------------------------------------------------------------------------
 
-def _t(n: int, sr: int) -> np.ndarray:
-    return np.arange(n, dtype=np.float64) / sr
+_CACHE: dict[tuple[str, str, int], np.ndarray] = {}
 
 
-def _noise(n: int, seed: int) -> np.ndarray:
-    return np.random.default_rng(seed).uniform(-1.0, 1.0, n)
+def render_hit(name: str, sr: int = 44100, kit: str = "classic") -> np.ndarray:
+    """Vyrenderuje (a nacachuje) jeden bicí zvuk při velocity 127.
 
-
-def _fade_out(buf: np.ndarray, sr: int, sec: float = 0.002) -> np.ndarray:
-    n = min(int(sec * sr), buf.size // 2)
-    if n > 0:
-        ramp = np.linspace(1.0, 0.0, n)
-        buf[-n:] *= ramp
-        buf[:n] *= ramp[::-1]
-    return buf
-
-
-def _kick(sr: int) -> np.ndarray:
-    n = int(0.42 * sr)
-    t = _t(n, sr)
-    # pitch envelope 110 Hz -> 45 Hz, to dělá ten "dunk"
-    f = 45.0 + 75.0 * np.exp(-t / 0.030)
-    phase = TWO_PI * np.cumsum(f) / sr
-    body = np.sin(phase) * np.exp(-t / 0.16)
-    click = _noise(n, 7) * np.exp(-t / 0.004) * 0.25
-    return _fade_out((body + click) * 0.80, sr)
-
-
-def _snare(sr: int) -> np.ndarray:
-    from .patch import onepole_hp, onepole_lp
-    n = int(0.30 * sr)
-    t = _t(n, sr)
-    noise = _noise(n, 11) * np.exp(-t / 0.085)
-    noise = onepole_hp(noise.astype(np.float32), 900.0, sr, poles=1)
-    noise = onepole_lp(noise, 7500.0, sr, poles=1)
-    tone = (np.sin(TWO_PI * 185.0 * t) * 0.6 +
-            np.sin(TWO_PI * 330.0 * t) * 0.3) * np.exp(-t / 0.045)
-    return _fade_out(noise.astype(np.float64) * 0.9 + tone * 0.5, sr)
-
-
-def _hat(sr: int, decay: float = 0.045, seed: int = 21) -> np.ndarray:
-    from .patch import onepole_hp
-    n = int(max(0.05, decay * 6) * sr)
-    t = _t(n, sr)
-    noise = _noise(n, seed) * np.exp(-t / decay)
-    noise = onepole_hp(noise.astype(np.float32), 7000.0, sr, poles=2)
-    return _fade_out(noise.astype(np.float64) * 0.55, sr)
-
-
-def _openhat(sr: int) -> np.ndarray:
-    return _hat(sr, decay=0.28, seed=22)
-
-
-def _clap(sr: int) -> np.ndarray:
-    from .patch import onepole_hp, onepole_lp
-    n = int(0.35 * sr)
-    t = _t(n, sr)
-    out = np.zeros(n)
-    # tři rychlé odrazy plus ocásek — tak zní tleskání skupiny lidí
-    for i, delay in enumerate((0.0, 0.011, 0.021)):
-        off = int(delay * sr)
-        seg = _noise(n - off, 31 + i) * np.exp(-_t(n - off, sr) / 0.014)
-        out[off:] += seg * (1.0 - 0.18 * i)
-    out += _noise(n, 41) * np.exp(-t / 0.12) * 0.35
-    out = onepole_hp(out.astype(np.float32), 900.0, sr, poles=1)
-    out = onepole_lp(out, 6000.0, sr, poles=1)
-    return _fade_out(out.astype(np.float64) * 0.6, sr)
-
-
-def _tom(sr: int) -> np.ndarray:
-    n = int(0.38 * sr)
-    t = _t(n, sr)
-    f = 120.0 + 90.0 * np.exp(-t / 0.05)
-    phase = TWO_PI * np.cumsum(f) / sr
-    body = np.sin(phase) * np.exp(-t / 0.18)
-    noise = _noise(n, 51) * np.exp(-t / 0.02) * 0.15
-    return _fade_out((body + noise) * 0.8, sr)
-
-
-def _ride(sr: int) -> np.ndarray:
-    from .patch import onepole_hp
-    n = int(0.9 * sr)
-    t = _t(n, sr)
-    metal = np.zeros(n)
-    for k, f in enumerate((2100.0, 3170.0, 4210.0, 5390.0, 6700.0)):
-        metal += np.sin(TWO_PI * f * t) * (0.6 ** k)
-    metal *= np.exp(-t / 0.35)
-    noise = _noise(n, 61) * np.exp(-t / 0.10) * 0.5
-    out = onepole_hp((metal * 0.35 + noise).astype(np.float32), 3000.0, sr, poles=1)
-    return _fade_out(out.astype(np.float64) * 0.45, sr)
-
-
-_GENERATORS = {
-    "kick": _kick,
-    "snare": _snare,
-    "hat": lambda sr: _hat(sr),
-    "openhat": _openhat,
-    "clap": _clap,
-    "tom": _tom,
-    "ride": _ride,
-}
-
-_CACHE: dict[tuple[str, int], np.ndarray] = {}
-
-
-def render_hit(name: str, sr: int = 44100) -> np.ndarray:
-    """Vyrenderuje (a nacachuje) jeden bicí zvuk při velocity 127."""
-    key = (name, sr)
+    Sada, která nástroj nemá, použije ten z `classic`.
+    """
+    from .kits import KITS
+    if kit not in KITS:
+        raise KeyError(f"neznámá bicí sada {kit!r}; k dispozici: "
+                       f"{', '.join(KITS)}")
+    key = (kit, name, sr)
     if key not in _CACHE:
-        if name not in _GENERATORS:
-            raise KeyError(f"neznámý bicí nástroj {name!r}")
-        _CACHE[key] = _GENERATORS[name](sr).astype(np.float32)
+        gen = KITS[kit].get(name) or KITS["classic"].get(name)
+        if gen is None:
+            raise KeyError(f"neznámý bicí nástroj {name!r}; k dispozici: "
+                           f"{', '.join(drum_names())}")
+        _CACHE[key] = np.asarray(gen(sr), dtype=np.float32)
     return _CACHE[key]

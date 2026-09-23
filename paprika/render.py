@@ -134,7 +134,7 @@ def render_track(track: Track, n: int, ctx: FxContext, cache: dict | None = None
             i = int(round(start * spb * sr))
             if i >= n:
                 continue
-            sample = _drums.render_hit(hit.name, sr)
+            sample = _drums.render_hit(hit.name, sr, getattr(track, "kit", "classic"))
             amp = (max(1, min(127, hit.velocity)) / 127.0) ** 1.4
             _add(buf, i, sample, amp)
     else:

@@ -16,7 +16,7 @@ from .note import Note
 from .patch import Patch
 from .presets import preset
 
-__all__ = ["Song", "Track", "DrumTrack", "Clip", "suppress_render"]
+__all__ = ["Song", "Track", "DrumTrack", "Bus", "Clip", "suppress_render"]
 
 # Když skladbu importuje CLI, `Song.render()` uvnitř souboru se má chovat jako
 # no-op — jinak by se renderovalo dvakrát. CLI si tenhle přepínač zapíná samo.
@@ -69,6 +69,7 @@ class Track:
         self.mono = bool(mono)
         self.glide = float(glide)
         self.automations: list = []
+        self.bus = None
 
     # -- pomocné ----------------------------------------------------------
     @property
@@ -166,6 +167,11 @@ class Track:
         """
         from .automation import Automation
         self.automations.append(Automation(target, points, curve))
+        return self
+
+    def to(self, bus):
+        """Pošle stopu do busu (objekt `Bus` nebo jeho jméno)."""
+        self.bus = self.song.get_bus(bus) if isinstance(bus, str) else bus
         return self
 
     def humanize(self, timing: float = 0.01, vel: float = 0.1,
@@ -290,6 +296,41 @@ class DrumTrack(Track):
         return self
 
 
+class Bus:
+    """Sběrnice: sečte své stopy, prožene je vlastním fx řetězem a pošle dál.
+
+    Typicky společná komprese bicích nebo reverb na skupinu. `pan` je tady
+    balance (stereo obraz busu zůstane), ne equal-power pan jako u stopy.
+    `Song.master` je taky `Bus` — poslední řetěz před limiterem.
+    """
+
+    def __init__(self, song: "Song", name: str, vol: float = 1.0,
+                 pan: float = 0.0):
+        self.song = song
+        self.name = name
+        self.vol = float(vol)
+        self.pan = float(max(-1.0, min(1.0, pan)))
+        self.fx_chain: list = []
+        self.automations: list = []
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Bus {self.name} fx={len(self.fx_chain)} vol={self.vol:g}>"
+
+    def fx(self, *effects):
+        """Připojí efekty na konec řetězu busu."""
+        self.fx_chain.extend(effects)
+        return self
+
+    def automate(self, target: str, points, curve: str = "lin"):
+        """Jako `Track.automate`: `vol`, `pan` nebo `<efekt>.<param>`."""
+        from .automation import Automation
+        self.automations.append(Automation(target, points, curve))
+        return self
+
+    def members(self) -> list:
+        return [t for t in self.song.tracks if t.bus is self]
+
+
 class Song:
     """Celá skladba. Čistý datový objekt — nezná CLI ani soubory."""
 
@@ -304,6 +345,8 @@ class Song:
         self.sample_rate = int(sample_rate)
         self.title = title
         self.tracks: list[Track] = []
+        self.buses: list[Bus] = []
+        self.master = Bus(self, "master")
         self.rendered_path: str | None = None
 
     # -- vlastnosti -------------------------------------------------------
@@ -332,7 +375,8 @@ class Song:
 
     # -- stavba -----------------------------------------------------------
     def _unique(self, name: str) -> str:
-        taken = {t.name for t in self.tracks}
+        taken = ({t.name for t in self.tracks} | {b.name for b in self.buses}
+                 | {"master"})
         if name not in taken:
             return name
         i = 2
@@ -371,6 +415,19 @@ class Song:
         t = DrumTrack(self, self._unique(name), vol, pan)
         self.tracks.append(t)
         return t
+
+    def bus(self, name: str = "bus", vol: float = 1.0, pan: float = 0.0) -> Bus:
+        """Přidá sběrnici. Stopy do ní pošleš přes `track.to(bus)`."""
+        b = Bus(self, self._unique(name), vol, pan)
+        self.buses.append(b)
+        return b
+
+    def get_bus(self, name: str) -> Bus:
+        for b in self.buses:
+            if b.name == name:
+                return b
+        raise KeyError(f"bus {name!r} neexistuje (k dispozici: "
+                       f"{', '.join(b.name for b in self.buses) or '—'})")
 
     def get(self, name: str) -> Track:
         for t in self.tracks:

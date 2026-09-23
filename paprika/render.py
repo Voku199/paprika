@@ -14,7 +14,7 @@ from . import drums as _drums
 from .automation import resolve as _resolve_automation
 from .fx import FxContext
 from .patch import midi_to_freq
-from .song import DrumTrack, Song, Track
+from .song import Bus, DrumTrack, Song, Track
 
 __all__ = ["render_song", "render_track", "mix", "limiter", "write_wav",
            "RenderResult"]
@@ -29,10 +29,11 @@ class RenderResult:
 
     def __init__(self, song: Song, audio: np.ndarray, tracks: dict,
                  raw_peak: float, path: str | None, report: str = "",
-                 seconds: float = 0.0):
+                 seconds: float = 0.0, buses: dict | None = None):
         self.song = song
         self.audio = audio
-        self.tracks = tracks          # jméno -> mono buffer po fx, před vol/pan
+        self.tracks = tracks          # jméno -> stereo buffer po fx, před vol/pan
+        self.buses = buses or {}      # jméno -> stereo buffer po fx busu, před vol
         self.raw_peak = raw_peak      # peak před limiterem
         self.path = path
         self.report = report
@@ -222,6 +223,43 @@ def _automated(owner, n: int, ctx: FxContext, beat_offset: float):
     return vol, pan, [fx for fx, _, _ in fx_autos]
 
 
+def _apply_balance(buf: np.ndarray, vol, pan) -> np.ndarray:
+    """Hlasitost × balance pro bus/master: pan 0 = beze změny obou kanálů."""
+    pan = np.clip(np.asarray(pan, dtype=np.float32), -1.0, 1.0)
+    vol = np.asarray(vol, dtype=np.float32)
+    out = np.empty_like(buf)
+    out[:, 0] = buf[:, 0] * vol * np.minimum(1.0, 1.0 - pan)
+    out[:, 1] = buf[:, 1] * vol * np.minimum(1.0, 1.0 + pan)
+    return out
+
+
+def _run_chain(chain, buf: np.ndarray, ctx: FxContext) -> np.ndarray:
+    n = buf.shape[0]
+    for effect in chain:
+        buf = _fit(effect.process(buf, ctx), n)
+    return buf
+
+
+def _render_bus(bus, inp: np.ndarray, ctx: FxContext, beat_offset: float):
+    """Fx řetěz busu s automatizací. Vrací (buffer po fx, vol, pan)."""
+    vol, pan, touched = _automated(bus, inp.shape[0], ctx, beat_offset)
+    try:
+        out = _run_chain(bus.fx_chain, inp, ctx)
+    finally:
+        for fx in touched:
+            fx.clear_curves()
+    return out, vol, pan
+
+
+def _deps(obj, song: Song, known: set) -> set:
+    """Jména stop/busů, které musí být hotové dřív než `obj`."""
+    out = {f.source for f in obj.fx_chain if getattr(f, "needs_tracks", False)}
+    if isinstance(obj, Bus):
+        out |= {t.name for t in obj.members()}
+    # neznámý zdroj Sidechainu nahlásí sám Sidechain, se seznamem stop
+    return out & known
+
+
 def _render_automated(t, n, ctx, cache, beat_offset, gains: dict) -> np.ndarray:
     vol, pan, touched = _automated(t, n, ctx, beat_offset)
     try:
@@ -276,6 +314,9 @@ def _tail_seconds(song: Song, ctx: FxContext) -> float:
         fx_tail = sum(f.tail(ctx) for f in t.fx_chain)
         release = getattr(getattr(t.patch, "adsr", None), "r", 0.3) or 0.0
         tail = max(tail, fx_tail + release + 0.3)
+    bus_tail = max((sum(f.tail(ctx) for f in b.fx_chain) for b in song.buses),
+                   default=0.0)
+    tail += bus_tail + sum(f.tail(ctx) for f in song.master.fx_chain)
     return float(min(20.0, tail))
 
 
@@ -303,21 +344,47 @@ def render_song(song: Song, path: str | None = None, report: bool = True,
     n = max(n, int(0.1 * sr))
 
     cache: dict = {}
-    buffers: dict = {}
+    buffers: dict = {}      # stopy po fx, před vol/pan
+    bus_out: dict = {}      # busy po fx, před vol/pan
     gains: dict = {}
 
-    # dvě fáze: nejdřív stopy bez sidechainu, pak ty, které cizí stopu potřebují
-    deferred = []
-    for t in song.tracks:
-        if any(getattr(f, "needs_tracks", False) for f in t.fx_chain):
-            deferred.append(t)
-        else:
-            buffers[t.name] = _render_automated(t, n, ctx, cache, beat_offset, gains)
-    ctx.track_buffers = buffers
-    for t in deferred:
-        buffers[t.name] = _render_automated(t, n, ctx, cache, beat_offset, gains)
+    # render podle závislostí: stopa čeká na zdroje svých Sidechainů, bus na
+    # své stopy; když se v kole nic nepohne, je v závislostech cyklus
+    known = {t.name for t in song.tracks} | {b.name for b in song.buses}
+    pending = list(song.tracks) + list(song.buses)
+    ready: dict = {}
+    ctx.track_buffers = ready
+    while pending:
+        progressed = False
+        for obj in list(pending):
+            if not _deps(obj, song, known) <= ready.keys():
+                continue
+            if isinstance(obj, Bus):
+                inp = np.zeros((n, 2), dtype=np.float32)
+                for t in obj.members():
+                    inp += _apply_gain(buffers[t.name], *gains[t.name])
+                out, vol, pan = _render_bus(obj, inp, ctx, beat_offset)
+                bus_out[obj.name] = out
+                gains[obj.name] = (vol, pan)
+                ready[obj.name] = out
+            else:
+                buffers[obj.name] = _render_automated(obj, n, ctx, cache,
+                                                      beat_offset, gains)
+                ready[obj.name] = buffers[obj.name]
+            pending.remove(obj)
+            progressed = True
+        if not progressed:
+            names = ", ".join(o.name for o in pending)
+            raise RuntimeError(
+                f"cyklická závislost renderu: {names} — Sidechain nesmí brát "
+                f"zdroj z busu, do kterého stopa sama patří")
 
-    stereo = mix(buffers, song.tracks, n, gains)
+    direct = [t for t in song.tracks if t.bus is None]
+    stereo = mix(buffers, direct, n, gains)
+    for b in song.buses:
+        stereo += _apply_balance(bus_out[b.name], *gains[b.name])
+    master_fx, m_vol, m_pan = _render_bus(song.master, stereo, ctx, beat_offset)
+    stereo = _apply_balance(master_fx, m_vol, m_pan)
     raw_peak = float(np.max(np.abs(stereo))) if stereo.size else 0.0
     audio = limiter(stereo)
 
@@ -326,6 +393,8 @@ def render_song(song: Song, path: str | None = None, report: bool = True,
     audio, n_used = _trim(audio, min_n)
     for name in buffers:
         buffers[name] = buffers[name][:n_used]
+    for name in bus_out:
+        bus_out[name] = bus_out[name][:n_used]
 
     out_path = None
     if path:
@@ -346,7 +415,7 @@ def render_song(song: Song, path: str | None = None, report: bool = True,
             print(text)
 
     return RenderResult(song, audio, buffers, raw_peak, out_path, text,
-                        seconds=audio.shape[0] / sr)
+                        seconds=audio.shape[0] / sr, buses=bus_out)
 
 
 def _trim(audio: np.ndarray, min_n: int, floor: float = 1e-4):

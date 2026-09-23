@@ -131,15 +131,17 @@ merge into one voice; same pitch without `>` retriggers (808 patterns).
   55–880 Hz) and that every new preset differs spectrally from the others.
 - **New drum kit** — a dict of `name -> f(sr)` in `kits.py`, registered in
   `KITS`; missing instruments fall back to `classic`.
-- **New oscillator / filter** — subclass `Osc` (or match the `LP`/`HP` shape:
-  `apply(x, sr, env)`), implement `key()`, export from `__init__.py`.
+- **New oscillator / filter** — subclass `Osc` (`render(freq, n, sr, phase)`,
+  `freq` scalar or per-sample curve) or match the patch-filter shape
+  `apply(x, sr, env=None, scale=1.0, bpm=120.0, freq=440.0)` accepting `(n,)`
+  and `(n, 2)`; implement `key()`, export from `__init__.py`.
 - **New effect** — subclass `Fx` with `process_mono(x, ctx)` (or a stereo-aware
   `process(buf, ctx)`) and `tail(ctx)`; list automatable params in
   `AUTOMATABLE` and read them via `self.value(param)`; accept `name=`.
   Feedback structures are computed **block-wise by delay length** (see
-  `_feedback_delay`, `_allpass`) so recursion stays vectorized. Do not write
-  per-sample Python loops; the only accepted one is the variable-cutoff branch
-  of `onepole_lp`.
+  `_feedback_delay`, `_allpass`) so recursion stays vectorized; IIR filters go
+  through scipy `lfilter` (block-wise with carried `zi` when time-varying, see
+  `dsp.filt_varying`, `dsp.onepole`). Do not write per-sample Python loops.
 - **New warning rule** — a `_rule(song, ..., warns)` function in `analyze.py`
   appending `Warning_("WARN"|"INFO", where, text)`, wired into `warnings_for`.
   Rules must cap their output (existing ones stop after 3–4 hits) so the report

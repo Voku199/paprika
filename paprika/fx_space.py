@@ -30,6 +30,8 @@ class Hall(Fx):
     """Konvoluční reverb. `preset` room / plate / hall / cathedral, `size`
     násobí dobu doznění, jednotlivé parametry jdou přepsat."""
 
+    STEREO = True
+
     AUTOMATABLE = ("mix",)
 
     def __init__(self, preset: str = "hall", size: float | None = None,
@@ -85,6 +87,8 @@ class Chorus(Fx):
     """Chorus: pár kopií se zpožděním, které pomalu kolísá. Levý a pravý
     kanál kolísají v protifázi, takže se zvuk rozšíří do stran."""
 
+    STEREO = True
+
     AUTOMATABLE = ("mix",)
     BASE_MS = 15.0
 
@@ -124,6 +128,8 @@ class Width(Fx):
 
     Pozor na víc než ~1.6 — v mono se široký signál začne vyrušovat
     (report to hlásí jako fázový rozpad)."""
+
+    STEREO = True
 
     AUTOMATABLE = ("amount",)
 

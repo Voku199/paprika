@@ -25,6 +25,8 @@ class Compressor(Fx):
     groove pohromadě, na masteru „lepí“ mix.
     """
 
+    STEREO = True
+
     AUTOMATABLE = ("threshold",)
 
     def __init__(self, threshold: float = -18.0, ratio: float = 4.0,
@@ -68,6 +70,8 @@ class Gate(Fx):
     `rate` (zlomek celé noty). `depth` 1 = úplné ticho, 0.5 = na půl.
     Počítá se od začátku skladby, takže sedí i při renderu výřezu.
     """
+
+    STEREO = True
 
     OPEN = "xX"
     CLOSED = "._"

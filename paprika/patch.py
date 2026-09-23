@@ -7,6 +7,8 @@ filtry v `filters.py`; tenhle modul je re-exportuje, takže
 
 from __future__ import annotations
 
+import functools
+import inspect
 import math
 from dataclasses import dataclass, field
 
@@ -88,6 +90,22 @@ class ADSR:
 RR_CENTS = (0.0, 3.0, -3.0, 1.5, -1.5, 4.0, -4.0, 2.0)
 
 
+@functools.lru_cache(maxsize=None)
+def _accepted(cls, method: str, names: tuple) -> frozenset:
+    """Která z `names` jako keyword metoda třídy přijme (v1 rozšíření je nemají)."""
+    params = inspect.signature(getattr(cls, method)).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return frozenset(names)
+    return frozenset(n for n in names if n in params)
+
+
+def _call(obj, method: str, args: tuple, kwargs: dict):
+    """Zavolá metodu jen s keywordy, které zná — oscilátor nebo filtr napsaný
+    podle v1 (`render(freq, n, sr)`, `apply(x, sr, env)`) funguje dál."""
+    ok = _accepted(type(obj), method, tuple(kwargs))
+    return getattr(obj, method)(*args, **{k: v for k, v in kwargs.items() if k in ok})
+
+
 def _as_list(flt) -> list:
     if flt is None:
         return []
@@ -102,7 +120,9 @@ def _glide_curve(path, glide_time: float, n: int, sr: int) -> np.ndarray:
     `glide_time`). Počítá se jedním `lfilter`, žádný cyklus po samplech.
     """
     target = np.empty(n, dtype=np.float64)
-    pts = sorted(path)
+    # jen podle času: body se stejným časem (skok z předchozí noty) musí
+    # zůstat v pořadí, v jakém přišly, i když cílová výška je nižší
+    pts = sorted(path, key=lambda p: p[0])
     for i, (t, f) in enumerate(pts):
         start = 0 if i == 0 else min(n, max(0, int(round(t * sr))))
         end = n if i + 1 == len(pts) else min(n, max(0, int(round(pts[i + 1][0] * sr))))
@@ -203,8 +223,9 @@ class Patch:
         if moved:
             f = np.broadcast_to(np.asarray(f, dtype=np.float64), (total_n,))                 * 2.0 ** (semis / 12.0)
 
-        parts = [o.amp * np.asarray(o.render(f, total_n, sr, phase=phase),
-                                    dtype=np.float32) for o in self.osc]
+        parts = [o.amp * np.asarray(_call(o, "render", (f, total_n, sr),
+                                          {"phase": phase}), dtype=np.float32)
+                 for o in self.osc]
         stereo = any(p.ndim == 2 for p in parts)
         buf = np.zeros((total_n, 2) if stereo else total_n, dtype=np.float32)
         for p in parts:
@@ -221,9 +242,10 @@ class Patch:
         tv = vel if tone_vel is None else tone_vel
         scale = (2.0 ** (self.vel_to_cutoff * 3.0 * (tv / 127.0 - 0.75))
                  if self.vel_to_cutoff else 1.0)
-        base_f = float(freq) if not glide_path else float(sorted(glide_path)[-1][1])
+        base_f = float(freq) if not glide_path else float(glide_path[-1][1])
         for flt in self.filters:
-            buf = flt.apply(buf, sr, env, scale=scale, bpm=bpm, freq=base_f)
+            buf = _call(flt, "apply", (buf, sr, env),
+                        {"scale": scale, "bpm": bpm, "freq": base_f})
 
         buf = np.asarray(buf, dtype=np.float32)
         buf *= self.gain * ((max(0, min(127, int(vel))) / 127.0) ** 1.6)

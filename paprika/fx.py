@@ -53,9 +53,14 @@ def _col(v, buf: np.ndarray):
 
 
 class Fx:
-    """Základ efektu."""
+    """Základ efektu.
+
+    `STEREO = True` říká, že `process` umí `(n, 2)`. Efekt napsaný podle v1
+    (přepsaný `process`, bez flagu) dostane v renderu každý kanál zvlášť.
+    """
 
     AUTOMATABLE: tuple = ()
+    STEREO = False
 
     def process(self, buf: np.ndarray, ctx: FxContext) -> np.ndarray:
         buf = np.asarray(buf, dtype=np.float32)
@@ -96,6 +101,19 @@ class Fx:
         return getattr(self, param)
 
 
+def apply_fx(effect, buf: np.ndarray, ctx: FxContext) -> np.ndarray:
+    """Prožene stereo buffer efektem; v1 efekt s vlastním `process` jede po kanálech."""
+    if getattr(effect, "STEREO", False) or type(effect).process is Fx.process:
+        return effect.process(buf, ctx)
+    n = buf.shape[0]
+    chans = []
+    for c in range(buf.shape[1]):
+        y = np.asarray(effect.process(np.ascontiguousarray(buf[:, c]), ctx),
+                       dtype=np.float32).reshape(-1)[:n]
+        chans.append(np.pad(y, (0, n - y.size)))
+    return np.stack(chans, axis=1)
+
+
 def _feedback_delay(x: np.ndarray, d: int, fb: float) -> np.ndarray:
     """y[n] = x[n] + fb * y[n-d], počítané po blocích délky d."""
     if d <= 0:
@@ -126,6 +144,8 @@ class Reverb(Fx):
     takže dozvuk je v každém uchu jiný. `width` 0 = mono dozvuk, 1 = plně
     rozevřený.
     """
+
+    STEREO = True
 
     COMBS = (1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617)
     ALLPASS = (556, 441, 341, 225)
@@ -190,6 +210,8 @@ class Delay(Fx):
     jako páskové echo. `ping_pong=True` střídá echa vlevo a vpravo.
     """
 
+    STEREO = True
+
     AUTOMATABLE = ("mix",)
 
     def __init__(self, time: float = 0.25, fb: float = 0.3, mix: float = 0.25,
@@ -211,21 +233,21 @@ class Delay(Fx):
         n_loops = np.log(1e-3) / np.log(max(self.fb, 1e-6))
         return float(min(15.0, self._sec(ctx) * (n_loops + 1)))
 
-    def _repeats(self, src: np.ndarray, d: int, sr: int) -> list[tuple[int, np.ndarray]]:
-        """Jednotlivá echa: (zpoždění ve vzorcích, signál už zeslabený a ztmavený)."""
+    def _repeats(self, src: np.ndarray, d: int, sr: int):
+        """Jednotlivá echa: (zpoždění ve vzorcích, signál už zeslabený a ztmavený).
+
+        Generátor — v paměti je vždy jen jedno echo, ne všechna naráz."""
         n = src.shape[0]
         if self.fb > 0:
             count = int(math.ceil(math.log(1e-3) / math.log(self.fb))) + 1
         else:
             count = 1
         count = max(1, min(count, n // max(1, d)))
-        out = []
         cur = src.astype(np.float64)
         for k in range(1, count + 1):
             if self.tone:
                 cur = dsp.onepole(cur, self.tone, sr).astype(np.float64)
-            out.append((k * d, cur * self.fb ** (k - 1)))
-        return out
+            yield k * d, cur * self.fb ** (k - 1)
 
     def process(self, buf, ctx):
         buf = np.asarray(buf, dtype=np.float32)
@@ -276,6 +298,8 @@ class LowPass(Fx):
     """Lowpass na celé stopě. `res` 0..1 přidá rezonanci, `cutoff` jde
     automatizovat (filtr sweep do dropu)."""
 
+    STEREO = True
+
     AUTOMATABLE = ("cutoff", "res")
 
     def __init__(self, cutoff: float = 2000.0, poles: int = 2, res: float = 0.0,
@@ -291,6 +315,8 @@ class LowPass(Fx):
 
 class HighPass(Fx):
     """Highpass na celé stopě — nejlevnější způsob, jak uvolnit basy v mixu."""
+
+    STEREO = True
 
     AUTOMATABLE = ("cutoff", "res")
 
@@ -311,6 +337,8 @@ class Filter(Fx):
     `bp` s vyšší rezonancí a automatizovaným cutoffem je klasický „wah“
     nebo telefonní hlas; `notch` vyřízne jednu frekvenci.
     """
+
+    STEREO = True
 
     MODES = ("lp", "hp", "bp", "notch")
     AUTOMATABLE = ("cutoff", "res")
@@ -334,6 +362,8 @@ class EQ(Fx):
     """Ekvalizér: `low=(freq, dB)` shelf, `mid=[(freq, dB, q), ...]` zvony,
     `high=(freq, dB)` shelf. Kladné dB zesílí, záporné utlumí."""
 
+    STEREO = True
+
     def __init__(self, low=None, mid=(), high=None, name: str | None = None):
         self.low = tuple(low) if low else None
         self.mid = [tuple(m) for m in (mid or ())]
@@ -354,6 +384,8 @@ class EQ(Fx):
 class Saturate(Fx):
     """Měkké zkreslení: tanh normalizovaný tak, aby nezvedal hlasitost."""
 
+    STEREO = True
+
     AUTOMATABLE = ("drive", "mix")
 
     def __init__(self, drive: float = 2.0, mix: float = 1.0,
@@ -372,6 +404,8 @@ class Saturate(Fx):
 
 class Sidechain(Fx):
     """Klasické pumpování: obálka jiné stopy (nebo busu) stahuje hlasitost téhle."""
+
+    STEREO = True
 
     def __init__(self, source: str, amount: float = 0.6, attack: float = 0.005,
                  release: float = 0.18, name: str | None = None):

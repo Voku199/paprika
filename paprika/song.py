@@ -173,8 +173,19 @@ class Track:
         return self
 
     def to(self, bus):
-        """Pošle stopu do busu (objekt `Bus` nebo jeho jméno)."""
-        self.bus = self.song.get_bus(bus) if isinstance(bus, str) else bus
+        """Pošle stopu do busu (objekt `Bus` nebo jeho jméno).
+
+        `to(song.master)` / `to("master")` vrátí stopu rovnou do mixu.
+        """
+        if isinstance(bus, str):
+            bus = self.song.master if bus == "master" else self.song.get_bus(bus)
+        if bus is self.song.master:
+            self.bus = None
+            return self
+        if bus not in self.song.buses:
+            raise ValueError(f"bus {getattr(bus, 'name', bus)!r} nepatří téhle "
+                             f"skladbě — vytvoř ho přes song.bus()")
+        self.bus = bus
         return self
 
     def humanize(self, timing: float = 0.01, vel: float = 0.1,

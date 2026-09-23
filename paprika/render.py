@@ -13,6 +13,7 @@ import numpy as np
 from . import drums as _drums
 from .automation import resolve as _resolve_automation
 from .fx import FxContext
+from .fx import apply_fx as _apply_fx
 from .patch import midi_to_freq
 from . import sfx as _sfx
 from .song import Bus, DrumTrack, SfxTrack, Song, Track
@@ -193,7 +194,7 @@ def render_track(track: Track, n: int, ctx: FxContext, cache: dict | None = None
 
     if apply_fx:
         for effect in track.fx_chain:
-            buf = _fit(effect.process(buf, ctx), n)
+            buf = _fit(_apply_fx(effect, buf, ctx), n)
     return buf
 
 
@@ -259,7 +260,7 @@ def _apply_balance(buf: np.ndarray, vol, pan) -> np.ndarray:
 def _run_chain(chain, buf: np.ndarray, ctx: FxContext) -> np.ndarray:
     n = buf.shape[0]
     for effect in chain:
-        buf = _fit(effect.process(buf, ctx), n)
+        buf = _fit(_apply_fx(effect, buf, ctx), n)
     return buf
 
 

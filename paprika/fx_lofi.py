@@ -18,6 +18,8 @@ __all__ = ["BitCrush", "Tape"]
 class BitCrush(Fx):
     """Snížení bitové hloubky a vzorkovací frekvence (sample & hold)."""
 
+    STEREO = True
+
     AUTOMATABLE = ("mix",)
 
     def __init__(self, bits: int = 8, downsample: int = 4, mix: float = 1.0,
@@ -43,6 +45,8 @@ class Tape(Fx):
     """Páska: pomalé kolísání rychlosti (`wow`), rychlé chvění (`flutter`),
     saturace (`drive`) a šum (`hiss`). Oba kanály kolísají spolu — páska je
     jedna."""
+
+    STEREO = True
 
     BASE_MS = 5.0
 

@@ -27,7 +27,7 @@ from . import dsp
 from .patch import onepole_hp, onepole_lp
 
 __all__ = ["Fx", "FxContext", "Reverb", "Delay", "LowPass", "HighPass",
-           "Saturate", "Sidechain"]
+           "Filter", "EQ", "Saturate", "Sidechain"]
 
 
 @dataclass
@@ -266,6 +266,8 @@ def _filter_process(fx, buf, ctx, kind: str):
         return low if kind == "lp" else (buf - low).astype(np.float32)
     q = dsp.res_to_q(res)
     y = dsp.filt_varying(buf, kind, cut, ctx.sr, q=q, stages=max(1, fx.poles // 2))
+    if kind not in ("lp", "hp"):
+        return y
     comp = (dsp.Q_MIN / np.asarray(q)) ** 0.35
     return (y * _col(comp, y)).astype(np.float32)
 
@@ -301,6 +303,52 @@ class HighPass(Fx):
 
     def process(self, buf, ctx):
         return _filter_process(self, buf, ctx, "hp")
+
+
+class Filter(Fx):
+    """Filtr s volitelným typem: `lp`, `hp`, `bp` (pásmo) nebo `notch` (zářez).
+
+    `bp` s vyšší rezonancí a automatizovaným cutoffem je klasický „wah“
+    nebo telefonní hlas; `notch` vyřízne jednu frekvenci.
+    """
+
+    MODES = ("lp", "hp", "bp", "notch")
+    AUTOMATABLE = ("cutoff", "res")
+
+    def __init__(self, mode: str = "lp", cutoff: float = 1000.0, res: float = 0.0,
+                 name: str | None = None):
+        if mode not in self.MODES:
+            raise ValueError(f"neznámý typ filtru {mode!r}; k dispozici: "
+                             f"{', '.join(self.MODES)}")
+        self.mode = mode
+        self.cutoff = float(cutoff)
+        self.res = float(res)
+        self.poles = 2
+        self.name = name
+
+    def process(self, buf, ctx):
+        return _filter_process(self, buf, ctx, self.mode)
+
+
+class EQ(Fx):
+    """Ekvalizér: `low=(freq, dB)` shelf, `mid=[(freq, dB, q), ...]` zvony,
+    `high=(freq, dB)` shelf. Kladné dB zesílí, záporné utlumí."""
+
+    def __init__(self, low=None, mid=(), high=None, name: str | None = None):
+        self.low = tuple(low) if low else None
+        self.mid = [tuple(m) for m in (mid or ())]
+        self.high = tuple(high) if high else None
+        self.name = name
+
+    def process(self, buf, ctx):
+        y = np.asarray(buf, dtype=np.float32)
+        if self.low:
+            y = dsp.filt(y, "lowshelf", self.low[0], ctx.sr, gain_db=self.low[1])
+        for freq, gain, *q in self.mid:
+            y = dsp.filt(y, "peak", freq, ctx.sr, q=q[0] if q else 1.0, gain_db=gain)
+        if self.high:
+            y = dsp.filt(y, "highshelf", self.high[0], ctx.sr, gain_db=self.high[1])
+        return y
 
 
 class Saturate(Fx):

@@ -39,6 +39,60 @@ class TestADSR(unittest.TestCase):
         self.assertTrue(np.all(env >= 0.0))
 
 
+class TestADSRCurves(unittest.TestCase):
+    def v1_linear(self, gate_n, total_n, a, d, s, r):
+        """Referenční v1 implementace lineární obálky."""
+        env = np.zeros(total_n, dtype=np.float32)
+        gate_n = max(1, min(int(gate_n), total_n))
+        a_n, d_n, r_n = (max(1, int(x * SR)) for x in (a, d, r))
+        seg = min(a_n, gate_n)
+        env[:seg] = np.linspace(0.0, 1.0, seg, endpoint=False, dtype=np.float32)
+        i = seg
+        if i < gate_n:
+            seg = min(d_n, gate_n - i)
+            env[i:i + seg] = np.linspace(1.0, s, seg, endpoint=False, dtype=np.float32)
+            i += seg
+        if i < gate_n:
+            env[i:gate_n] = s
+        level = float(env[gate_n - 1])
+        tail = total_n - gate_n
+        if tail > 0:
+            seg = min(r_n, tail)
+            env[gate_n:gate_n + seg] = np.linspace(level, 0.0, seg, dtype=np.float32)
+        return env
+
+    def test_lin_matches_v1(self):
+        env = ADSR(0.01, 0.1, 0.5, 0.2, curve="lin").render(SR, SR + SR // 5, SR)
+        np.testing.assert_array_equal(env, self.v1_linear(SR, SR + SR // 5, 0.01, 0.1, 0.5, 0.2))
+
+    def test_default_is_exp(self):
+        self.assertEqual(ADSR().curve, "exp")
+
+    def test_exp_decay_is_convex(self):
+        env = ADSR(0.001, 0.2, 0.2, 0.2).render(SR, SR + SR // 5, SR)
+        mid = int(0.001 * SR) + int(0.1 * SR)
+        self.assertLess(float(env[mid]), 0.6 - 0.05)   # lineární by dala 0.6
+        self.assertAlmostEqual(float(env[int(0.5 * SR)]), 0.2, places=4)
+
+    def test_exp_release_ends_at_zero_and_is_convex(self):
+        env = ADSR(0.001, 0.01, 0.8, 0.4).render(SR, SR + int(0.4 * SR) + 10, SR)
+        self.assertAlmostEqual(float(env[SR + int(0.4 * SR) - 1]), 0.0, places=4)
+        self.assertLess(float(env[SR + int(0.2 * SR)]), 0.4 - 0.05)
+
+    def test_curve_in_key_and_validated(self):
+        self.assertNotEqual(ADSR(curve="lin").key(), ADSR().key())
+        with self.assertRaises(ValueError):
+            ADSR(curve="log")
+
+    def test_old_tests_hold_for_both_curves(self):
+        for c in ("exp", "lin"):
+            env = ADSR(0.05, 0.1, 0.4, 0.2, curve=c).render(SR, SR + SR // 5, SR)
+            self.assertAlmostEqual(float(env[0]), 0.0, places=6)
+            self.assertAlmostEqual(float(env[-1]), 0.0, places=6)
+            self.assertAlmostEqual(float(env.max()), 1.0, places=2)
+            self.assertAlmostEqual(float(env[SR // 2]), 0.4, places=4)
+
+
 class TestOscillators(unittest.TestCase):
     def test_all_oscillators_are_finite_and_bounded(self):
         for osc in (Sine(), Saw(), Square(), Tri(), Noise(), FM()):

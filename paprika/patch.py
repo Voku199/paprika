@@ -43,12 +43,31 @@ def midi_to_freq(pitch: float) -> float:
 
 @dataclass
 class ADSR:
-    """Attack / decay / sustain / release. Časy v sekundách, sustain 0-1."""
+    """Attack / decay / sustain / release. Časy v sekundách, sustain 0-1.
+
+    `curve="exp"` (výchozí): decay a release klesají exponenciálně a attack
+    je lehce konvexní — jako akustický nástroj nebo analogový syntezátor.
+    `curve="lin"` jsou přímky z v1 (typický zvuk trackerů a čipů).
+    """
 
     a: float = 0.01
     d: float = 0.1
     s: float = 0.7
     r: float = 0.2
+    curve: str = "exp"
+
+    CURVES = ("exp", "lin")
+
+    def __post_init__(self):
+        if self.curve not in self.CURVES:
+            raise ValueError(f"neznámá křivka obálky {self.curve!r}; k dispozici: "
+                             f"{', '.join(self.CURVES)}")
+
+    @staticmethod
+    def _fall(x: np.ndarray) -> np.ndarray:
+        """Exponenciální pokles 1 -> 0 na x ∈ [0, 1], přesně 0 v x = 1."""
+        y = (np.exp(-5.0 * x.astype(np.float64)) - np.exp(-5.0)) / (1.0 - np.exp(-5.0))
+        return np.clip(y, 0.0, 1.0).astype(np.float32)
 
     def render(self, gate_n: int, total_n: int, sr: int) -> np.ndarray:
         env = np.zeros(total_n, dtype=np.float32)
@@ -58,29 +77,37 @@ class ADSR:
         a_n = max(1, int(self.a * sr))
         d_n = max(1, int(self.d * sr))
         r_n = max(1, int(self.r * sr))
+        exp = self.curve == "exp"
 
-        i = 0
         seg = min(a_n, gate_n)
-        env[:seg] = np.linspace(0.0, 1.0, seg, endpoint=False, dtype=np.float32)
+        x = np.linspace(0.0, 1.0, a_n, endpoint=False, dtype=np.float32)[:seg]
+        env[:seg] = 1.0 - (1.0 - x) ** 2 if exp else x
         i = seg
         if i < gate_n:
             seg = min(d_n, gate_n - i)
-            env[i:i + seg] = np.linspace(1.0, self.s, seg, endpoint=False,
-                                         dtype=np.float32)
+            if exp:
+                x = np.linspace(0.0, 1.0, d_n, endpoint=False, dtype=np.float32)[:seg]
+                env[i:i + seg] = self.s + (1.0 - self.s) * self._fall(x)
+            else:
+                env[i:i + seg] = np.linspace(1.0, self.s, seg, endpoint=False,
+                                             dtype=np.float32)
             i += seg
         if i < gate_n:
             env[i:gate_n] = self.s
-            i = gate_n
-        level = float(env[gate_n - 1]) if gate_n > 0 else 0.0
+        level = float(env[gate_n - 1])
         tail = total_n - gate_n
         if tail > 0:
             seg = min(r_n, tail)
-            env[gate_n:gate_n + seg] = np.linspace(level, 0.0, seg, dtype=np.float32)
+            if exp:
+                x = np.linspace(0.0, 1.0, seg, dtype=np.float32)
+                env[gate_n:gate_n + seg] = level * self._fall(x)
+            else:
+                env[gate_n:gate_n + seg] = np.linspace(level, 0.0, seg, dtype=np.float32)
             # za releasem je ticho, což už v poli je
         return env
 
     def key(self) -> tuple:
-        return (self.a, self.d, self.s, self.r)
+        return (self.a, self.d, self.s, self.r, self.curve)
 
 
 # --------------------------------------------------------------------------

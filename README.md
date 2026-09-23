@@ -60,6 +60,7 @@ python -m paprika show   songs/romantic.py --bars 0:4   # jen ASCII, bez renderu
 python -m paprika play   output/romantic.wav            # systémový přehrávač
 python -m paprika presets                               # seznam nástrojů
 python -m paprika analyze-ref referencni.mp3             # tempo/key/akordy/dynamika
+python -m paprika compare ref.mp3 output/song.wav        # mix metriky proti referenci
 ```
 
 Skladba je normální Python modul. `render` ho naimportuje a najde na úrovni
@@ -170,9 +171,15 @@ cutoff), `BP`, `Formant(vowel, voice, morph)` — samohlásky a–u pro sbor;
 Modulace v patchi: `vibrato=LFO(5, 0.1, delay=0.3)` (půltóny, nástup se
 zpožděním), `tremolo=LFO`, `pitch_env=PitchEnv(semi, time)`,
 `vel_to_cutoff` (silnější úhoz = jasnější), `rr` (round-robin varianty),
-`drift` (analogové kolísání v centech).
+`drift` (analogové kolísání v centech), `ensemble=Ensemble(voices, detune,
+spread, smear)` — sekce místo sólisty: kopie hlasu rozladěné o ±`detune`
+centů, s nástupem rozmazaným o 0..`smear` s a rozprostřené do stran.
 
-Efekty: `Reverb(room, mix, damp, width)` (stereo Freeverb),
+`ADSR(a, d, s, r, curve="exp")` — decay a release klesají exponenciálně jako
+u akustického nástroje; `curve="lin"` jsou přímky z v1 (zní „trackerově“).
+
+Efekty: `Reverb(room, mix, damp, width, algo="conv")` (konvoluční dozvuk;
+`algo="freeverb"` = kovovější Freeverb z v1),
 `Hall(preset, size, mix)` (konvoluce: room / plate / hall / cathedral),
 `Delay(time, fb, mix, ping_pong, tone)`, `LowPass`/`HighPass(cutoff, poles,
 res)`, `Filter(mode, cutoff, res)`, `EQ(low, mid, high)`, `Saturate(drive)`,
@@ -210,8 +217,42 @@ Pravidla warningů:
 | mono kompatibilita | korelace L/R stopy klesne pod 0 — v mono se vyruší |
 | statický zvuk | melodická stopa přes 16+ taktů bez modulace, automatizace i humanize |
 
+| přetížený sub | víc než 15 % výkonu pod 60 Hz (reference 3–7 %) |
+| úzké stereo | šířka mixu pod 8 % u skladby delší než 8 taktů |
+| tenké středy | méně než 15 % výkonu v 250 Hz–4 kHz |
+
 Maskování vypisuje jen čtyři nejdelší překryvy a tiché takty (pod -80 dBFS)
-ignoruje. Řádek `STEREO` ukazuje šířku mixu a korelaci kanálů.
+ignoruje. `BANDS` ukazuje sedm pásem (sub, bass, lowmid, mid, himid, pres,
+air), `STEREO` šířku mixu a korelaci kanálů — obojí s `[ok]` proti
+cinematic cíli (sub ≤ 12 %, středy ≥ 20 %, šířka ≥ 10 %).
+
+`compare` vypíše tytéž metriky pro render i referenční nahrávku vedle sebe
+a rozdíl proti prvnímu souboru:
+
+```
+$ python -m paprika compare songs_mp3/requiem.mp3 output/v2_showcase.wav
+soubor                          sub   bass lowmid    mid  himid ...  šířka
+requiem.mp3                    3.5%  41.8%  22.1%  27.9%   4.5% ...  29.4%
+v2_showcase.wav               11.0%  26.9%  36.2%  24.1%   0.9% ...  19.2%
+  rozdíl proti prvnímu        +7.5  -14.9  +14.1   -3.8   -3.6
+```
+
+## Jak se vyhnout „čipovému“ zvuku
+
+Retro / 16bitový dojem dělá strojová přesnost a úzký, basově přetížený mix.
+Co pomáhá (měřeno proti referencím):
+
+- **Sekce místo sólisty** — smyčce, sbor, žesťe, pady přes `Ensemble`
+  (presety `strings_ens`, `choir_*`, `brass_section`, `warmpad`, … ho mají).
+- **Žádná rychlá arpeggia** 1/16 na pluck/square — to je podpis čipové
+  hudby. Rozložené akordy ve čtvrtích/osminách, legato linky, držené akordy.
+- **HighPass na všem kromě basů a kopáku** (80–180 Hz) — sub nechat 808
+  a kopáku, a i ty tak, aby sub zůstal pod ~12 %.
+- **Prostor** — `Hall`/`Reverb` na melodické stopy, pan ±0.1–0.3.
+- **Mastering** — `s.master.fx(*mastering("cinematic"))` (také `darkpop`,
+  `lofi`): HP 30 Hz, jemné EQ, glue kompresor, lehká páska.
+- **Humanize** na každé stopě, vibrato se zpožděním na sólech.
+- Ověř: `python -m paprika compare reference.mp3 output/song.wav`.
 
 ASCII náhled (`show`) kreslí timeline bez renderu — rychlá kontrola struktury:
 
@@ -270,9 +311,11 @@ paprika/
   dsp.py          biquad filtry, LFO, šum, Karplus-Strong, syntetická IR
   oscillators.py  Sine … FM, SuperSaw, Pulse, Pluck, Additive
   filters.py      LP, HP, BP, Formant
-  modulation.py   LFO, PitchEnv
+  modulation.py   LFO, PitchEnv, Ensemble
   patch.py        ADSR, Patch.voice() (modulace, glide, round-robin)
   automation.py   křivky automatizace a jejich cíle
+  metrics.py      mix metriky (7 pásem, šířka, crest, LRA) pro report a compare
+  mastering.py    hotové master řetězy (cinematic, darkpop, lofi)
   presets.py      37 nástrojů s tagy, výchozí fx
   drums.py        pattern stringy, render úderů
   kits.py         bicí sady (classic, trap, cinematic, ...)

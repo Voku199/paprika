@@ -37,6 +37,7 @@ python -m paprika render songs/x.py --waveform --play    # + envelope, then open
 python -m paprika show   songs/x.py --bars 12:16 --res 16  # ASCII roll, no render
 python -m paprika play   output/x.wav
 python -m paprika presets
+python -m paprika compare ref.mp3 output/x.wav          # mix metrics vs a reference
 
 python -m pytest tests/                                  # ~285 tests, ~15 s
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py     # renders every song, ~1 min
@@ -67,11 +68,13 @@ Layer boundaries are deliberately sharp — keep them:
 - `note.py` — parses notation strings into `Note` (pitch, start_beat, dur_beats, velocity, glide).
 - `song.py` — `Song` / `Track` / `DrumTrack` / `SfxTrack` / `Bus` / `Clip`. Pure data model, no files, no CLI.
 - `dsp.py` — pure array DSP (biquads, time-varying filters, LFO, noise, Karplus-Strong, synthetic IR, polyBLEP). No model, no theory.
-- `oscillators.py`, `filters.py`, `modulation.py` — building blocks of a patch.
+- `oscillators.py`, `filters.py`, `modulation.py` — building blocks of a patch (`modulation.py` also holds `Ensemble`).
 - `patch.py` — `ADSR` + `Patch.voice()`: one phrase → one mono `(n,)` or stereo `(n, 2)` buffer; re-exports the building blocks.
 - `presets.py`, `kits.py`, `sfx.py` — instruments, drum kits, cinematic SFX; all synthesized, no samples.
 - `fx.py`, `fx_space.py`, `fx_dyn.py`, `fx_lofi.py` — track/bus/master effects.
 - `automation.py` — automation curves and target resolution.
+- `metrics.py` — mix metrics of a finished buffer/file (7 bands, width, crest, LRA); used by the report and `compare`. Reads only audio.
+- `mastering.py` — ready-made master chains built from existing effects.
 - `render.py` — model → stereo buffers → buses → master → WAV. Knows no music theory.
 - `analyze.py` — reads only the finished buffer + the data model.
 - `viz.py`, `cli.py` — ASCII output, argparse.
@@ -109,6 +112,16 @@ tone_vel, glide_path, glide_time, bpm)`. Any new `Osc`, filter, modulation, or
 `Patch` field **must** be included in the corresponding `key()`, otherwise two
 different sounds collide in the cache and one is silently rendered as the
 other (`tests/test_modulation.py::test_every_field_changes_key` guards this).
+
+`Patch(ensemble=...)` renders N detuned, time-smeared, panned copies of the
+oscillator+envelope core and runs the patch filters once on their stereo sum;
+the voice is longer by `smear`. ADSR defaults to `curve="exp"`; `Reverb`
+defaults to convolution (`algo="freeverb"` is v1).
+
+"Retro / 16-bit" feel was measured against `songs_mp3/` references: it came
+from mono sources, too much sub (< 60 Hz), thin mids, linear envelopes and
+fast arpeggios. Check new songs with `compare` — the cinematic target is
+sub ≤ 12 %, mids ≥ 20 %, width ≥ 10 % (`metrics.TARGETS`).
 
 ### DrumTrack is a special case
 

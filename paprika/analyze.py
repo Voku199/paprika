@@ -9,6 +9,7 @@ import os
 
 import numpy as np
 
+from . import metrics as _metrics
 from . import theory
 from .song import DrumTrack, Song
 
@@ -317,6 +318,33 @@ def _static_sound(song: Song, warns: list) -> None:
             return
 
 
+SUB_MAX = 15.0       # % výkonu pod 60 Hz, nad tím je mix „nafouklý“
+WIDTH_MIN = 8.0      # % side energie, pod tím zní mix jako mono / retro
+MIDS_MIN = 15.0      # % výkonu 250 Hz–4 kHz, pod tím chybí tělo nástrojů
+
+
+def _mix_balance(song: Song, audio: np.ndarray, warns: list) -> None:
+    """Pásma a šířka celého mixu proti cinematic referencím."""
+    if audio.size == 0 or not np.any(audio):
+        return
+    stats = _metrics.summary(audio, song.sample_rate)
+    if stats["bands"]["sub"] > SUB_MAX:
+        warns.append(Warning_(
+            "WARN", "mix",
+            f"sub přetížený: {stats['bands']['sub']:.0f} % pod 60 Hz (reference "
+            f"3–7 %) — ztiš 808/subbass, HighPass na ostatní stopy"))
+    if song.bars > 8 and audio.ndim == 2 and stats["width"] < WIDTH_MIN:
+        warns.append(Warning_(
+            "WARN", "mix",
+            f"úzké stereo: šířka {stats['width']:.0f} % (reference 13–30 %) — "
+            f"Ensemble, pan, Hall/Reverb, Chorus"))
+    if stats["mids"] < MIDS_MIN:
+        warns.append(Warning_(
+            "WARN", "mix",
+            f"tenké středy: {stats['mids']:.0f} % v 250 Hz–4 kHz (reference "
+            f"30–50 %) — chybí tělo nástrojů, přidej akordy/pady ve středech"))
+
+
 def warnings_for(song: Song, audio: np.ndarray, buffers: dict,
                  raw_peak: float) -> list:
     """Všechna pravidla pohromadě, WARN před INFO."""
@@ -324,6 +352,7 @@ def warnings_for(song: Song, audio: np.ndarray, buffers: dict,
     stereo_buffers = dict(buffers or {})
     buffers = {k: _mono(v) for k, v in stereo_buffers.items()}
     _levels(song, audio, raw_peak, warns)
+    _mix_balance(song, audio, warns)
     _out_of_scale(song, warns)
     _masking(song, buffers, warns)
     _mono_compat(song, stereo_buffers, warns)
@@ -348,11 +377,7 @@ def report(song: Song, audio: np.ndarray, buffers: dict, raw_peak: float,
     rms = float(np.sqrt(np.mean(audio ** 2))) if audio.size else 0.0
     mono = audio.mean(axis=1) if audio.ndim > 1 else audio
 
-    energy = band_energy(mono, sr)
-    total = energy.sum()
-    shares = (energy / total * 100.0) if total > 0 else np.zeros(3)
-    # energie nad 4 kHz je i v dobře znějícím mixu jen pár procent výkonu
-    balanced = shares[0] < 65 and shares[1] > 15 and shares[2] > 0.5
+    stats = _metrics.summary(audio, sr) if audio.size else None
 
     name = os.path.basename(path) if path else (song.title or "bez souboru")
     n_notes = sum(len(t.hits) if isinstance(t, DrumTrack) else len(t)
@@ -370,18 +395,17 @@ def report(song: Song, audio: np.ndarray, buffers: dict, raw_peak: float,
     lines.append(
         f"MIX      peak {_fmt_db(peak)} dBFS   rms {_fmt_db(rms)} dB   "
         f"{'clipping!' if raw_peak > 1.0 else 'no clipping'}")
-    lines.append(
-        "BANDS    " + "  ".join(f"{BAND_NAMES[i]} {shares[i]:.0f}%"
-                                for i in range(3)) +
-        f"      [{'ok' if balanced else 'zkontroluj'}]")
-    if audio.ndim == 2 and audio.shape[1] == 2 and audio.size:
-        mid = (audio[:, 0] + audio[:, 1]) * 0.5
-        side = (audio[:, 0] - audio[:, 1]) * 0.5
-        e_mid, e_side = float(np.sum(mid ** 2)), float(np.sum(side ** 2))
-        width = e_side / (e_mid + e_side) * 100.0 if e_mid + e_side > 0 else 0.0
-        corr = _correlation(audio)
-        lines.append(f"STEREO   šířka {width:.0f} %   korelace "
-                     f"{'—' if corr is None else f'{corr:.2f}'}")
+    if stats is not None:
+        t = _metrics.TARGETS
+        ok = (stats["bands"]["sub"] <= t["sub"][1] and stats["mids"] >= t["mids"][0])
+        lines.append(
+            "BANDS    " + " ".join(f"{k} {v:.0f}%" for k, v in stats["bands"].items())
+            + f"   [{'ok' if ok else 'zkontroluj'}]")
+        if audio.ndim == 2 and audio.shape[1] == 2:
+            corr = stats["corr"]
+            lines.append(f"STEREO   šířka {stats['width']:.0f} %   korelace "
+                         f"{'—' if corr is None else f'{corr:.2f}'}   "
+                         f"[{'ok' if stats['width'] >= t['width'][0] else 'úzké'}]")
 
     parts = []
     for t in song.tracks:

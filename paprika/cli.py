@@ -110,6 +110,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="analyzuje externí nahrávku (mp3/wav) — tempo, key, akordy, dynamika")
     ar.add_argument("audio", help="cesta k mp3/wav souboru")
 
+    cp = sub.add_parser(
+        "compare",
+        help="porovná mix metriky souborů (render vs. reference mp3/wav)")
+    cp.add_argument("files", nargs="+", help="wav/mp3 soubory; první je základ")
+
     pr = sub.add_parser("presets", help="vypíše presety, bicí sady a SFX")
     pr.add_argument("--tag", help="jen presety s tagem (orchestral, choir, ...)")
     return p
@@ -150,6 +155,17 @@ def main(argv=None) -> int:
             except ReferenceError as e:
                 raise CliError(str(e))
             print(format_reference_report(rep, os.path.basename(args.audio)))
+        elif args.cmd == "compare":
+            from .metrics import format_table, load_audio, summary
+            from .reference import ReferenceError
+            rows = []
+            for path in args.files:
+                try:
+                    audio, sr = load_audio(path)
+                except ReferenceError as e:
+                    raise CliError(str(e))
+                rows.append((os.path.basename(path), summary(audio, sr)))
+            print(format_table(rows))
         elif args.cmd == "presets":
             from .drums import DRUM_CHARS
             from .kits import kit_names

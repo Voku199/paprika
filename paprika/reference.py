@@ -58,7 +58,7 @@ class ReferenceReport:
 # načtení
 # --------------------------------------------------------------------------
 
-def _read_wav(path: str) -> tuple[np.ndarray, int]:
+def _read_wav(path: str, mono: bool = True) -> tuple[np.ndarray, int]:
     with wave.open(path, "rb") as wf:
         sr = wf.getframerate()
         n_ch = wf.getnchannels()
@@ -73,11 +73,13 @@ def _read_wav(path: str) -> tuple[np.ndarray, int]:
     else:
         raise ReferenceError(f"nepodporovaná šířka vzorku ve wav: {width * 8} bit")
     if n_ch > 1:
-        data = data.reshape(-1, n_ch).mean(axis=1)
+        data = data.reshape(-1, n_ch)
+        if mono:
+            data = data.mean(axis=1)
     return data, sr
 
 
-def _decode_to_wav(src_path: str, out_path: str) -> None:
+def _decode_to_wav(src_path: str, out_path: str, channels: int = 1) -> None:
     try:
         import imageio_ffmpeg
     except ImportError as e:
@@ -85,7 +87,7 @@ def _decode_to_wav(src_path: str, out_path: str) -> None:
             "dekódování ne-wav souborů potřebuje 'imageio-ffmpeg' "
             "(pip install imageio-ffmpeg); .wav jde načíst i bez toho") from e
     exe = imageio_ffmpeg.get_ffmpeg_exe()
-    cmd = [exe, "-y", "-i", src_path, "-ac", "1", "-ar", "44100", out_path]
+    cmd = [exe, "-y", "-i", src_path, "-ac", str(channels), "-ar", "44100", out_path]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise ReferenceError(

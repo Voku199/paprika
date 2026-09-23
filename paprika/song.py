@@ -495,21 +495,33 @@ class Song:
               fx=None) -> Track:
         """Přidá stopu. `instrument` je jméno presetu nebo `Patch`.
 
-        `mono=True` zapne mono legato, `glide` je délka sklouznutí v beatech.
-        `fx` je seznam efektů, které se rovnou připojí.
+        `mono=True` zapne mono legato, `glide` je délka sklouznutí v beatech
+        (když je nezadáš, vezmou se z `PRESET_DEFAULTS`, např. 808 je mono).
+        `fx` je seznam efektů, nebo `"default"` = doporučený řetěz presetu.
         """
+        from .presets import PRESET_DEFAULTS, preset_fx
+        defaults = {}
         if isinstance(instrument, str):
             patch = preset(instrument)
             label = name or instrument
+            defaults = PRESET_DEFAULTS.get(str(instrument).lower(), {})
         elif isinstance(instrument, Patch):
             patch = instrument
             label = name or instrument.name
         else:
             raise TypeError("instrument musí být jméno presetu nebo Patch")
+        if mono is None:
+            mono = defaults.get("mono", False)
+        if glide is None:
+            glide = defaults.get("glide", 0.0)
         t = Track(self, patch, self._unique(label), vol, pan, chromatic,
-                  mono=bool(mono) if mono is not None else False,
-                  glide=float(glide) if glide is not None else 0.0)
-        if fx:
+                  mono=bool(mono), glide=float(glide))
+        if isinstance(fx, str):
+            if fx != "default" or not isinstance(instrument, str):
+                raise ValueError("fx='default' funguje jen s jménem presetu; "
+                                 "jinak předej seznam efektů")
+            t.fx(*preset_fx(instrument))
+        elif fx:
             t.fx(*fx)
         self.tracks.append(t)
         return t

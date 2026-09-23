@@ -110,7 +110,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="analyzuje externí nahrávku (mp3/wav) — tempo, key, akordy, dynamika")
     ar.add_argument("audio", help="cesta k mp3/wav souboru")
 
-    sub.add_parser("presets", help="vypíše dostupné presety a bicí")
+    pr = sub.add_parser("presets", help="vypíše presety, bicí sady a SFX")
+    pr.add_argument("--tag", help="jen presety s tagem (orchestral, choir, ...)")
     return p
 
 
@@ -151,10 +152,21 @@ def main(argv=None) -> int:
             print(format_reference_report(rep, os.path.basename(args.audio)))
         elif args.cmd == "presets":
             from .drums import DRUM_CHARS
-            from .presets import preset_names
-            print("presety:  " + ", ".join(preset_names()))
-            print("bicí:     " + ", ".join(f"{k} = {v}"
-                                           for k, v in DRUM_CHARS.items()))
+            from .kits import kit_names
+            from .presets import presets_by_tag, tag_names
+            from .sfx import SFX_NAMES
+            tags = [args.tag] if args.tag else tag_names()
+            try:
+                for tag in tags:
+                    print(f"{tag + ':':<12}" + ", ".join(presets_by_tag(tag)))
+            except KeyError as e:
+                raise CliError(str(e).strip("'\""))
+            if not args.tag:
+                print("")
+                print("bicí sady:  " + ", ".join(kit_names()))
+                print("bicí znaky: " + ", ".join(f"{k} = {v}"
+                                                 for k, v in DRUM_CHARS.items()))
+                print("sfx:        " + ", ".join(SFX_NAMES))
     except CliError as e:
         print(f"chyba: {e}", file=sys.stderr)
         return 2

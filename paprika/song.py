@@ -68,6 +68,7 @@ class Track:
         # mezi nimi klouže `glide` beatů (808, acid, sólové linky)
         self.mono = bool(mono)
         self.glide = float(glide)
+        self.automations: list = []
 
     # -- pomocné ----------------------------------------------------------
     @property
@@ -152,6 +153,19 @@ class Track:
     def fx(self, *effects):
         """Připojí efekty na konec řetězu."""
         self.fx_chain.extend(effects)
+        return self
+
+    def automate(self, target: str, points, curve: str = "lin"):
+        """Změna parametru v čase: `vol`, `pan` nebo `<efekt>.<param>`.
+
+        `points` jsou `(takt, hodnota)`; křivka `lin`, `exp` (frekvence),
+        `s` (plynulý náběh) nebo `step`. Příklad filtr sweepu do dropu::
+
+            t.fx(LowPass(300)).automate("lowpass.cutoff",
+                                        [(16, 300), (24, 9000)], "exp")
+        """
+        from .automation import Automation
+        self.automations.append(Automation(target, points, curve))
         return self
 
     def humanize(self, timing: float = 0.01, vel: float = 0.1,

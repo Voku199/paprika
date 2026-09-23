@@ -11,6 +11,7 @@ import wave
 import numpy as np
 
 from . import drums as _drums
+from .automation import resolve as _resolve_automation
 from .fx import FxContext
 from .patch import midi_to_freq
 from .song import DrumTrack, Song, Track
@@ -172,24 +173,64 @@ def render_track(track: Track, n: int, ctx: FxContext, cache: dict | None = None
     return buf
 
 
-def _pan_gains(pan: float) -> tuple[float, float]:
-    """Equal-power pan: součet výkonů zůstává konstantní."""
-    angle = (float(np.clip(pan, -1.0, 1.0)) + 1.0) * 0.25 * np.pi
-    return float(np.cos(angle)), float(np.sin(angle))
+def _pan_gains(pan):
+    """Equal-power pan: součet výkonů zůstává konstantní. Skalár i pole."""
+    angle = (np.clip(pan, -1.0, 1.0) + 1.0) * 0.25 * np.pi
+    if np.ndim(angle) == 0:
+        return float(np.cos(angle)), float(np.sin(angle))
+    return np.cos(angle).astype(np.float32), np.sin(angle).astype(np.float32)
 
 
-def mix(track_buffers: dict, tracks: list, n: int) -> np.ndarray:
-    """Stopy -> stereo (n, 2) s equal-power panem (balance) a hlasitostí."""
+def _apply_gain(buf: np.ndarray, vol, pan) -> np.ndarray:
+    """Stereo buffer × hlasitost × balance (obojí skalár nebo pole)."""
+    left, right = _pan_gains(pan)
+    out = np.empty_like(buf)
+    out[:, 0] = buf[:, 0] * (np.asarray(vol, dtype=np.float32) * left)
+    out[:, 1] = buf[:, 1] * (np.asarray(vol, dtype=np.float32) * right)
+    return out
+
+
+def mix(track_buffers: dict, tracks: list, n: int,
+        gains: dict | None = None) -> np.ndarray:
+    """Stopy -> stereo (n, 2) s equal-power panem (balance) a hlasitostí.
+
+    `gains` = {jméno: (vol, pan)} přepíše statické `t.vol`/`t.pan`
+    (automatizace — hodnoty smí být pole po samplech).
+    """
     out = np.zeros((n, 2), dtype=np.float32)
     for t in tracks:
         buf = track_buffers.get(t.name)
         if buf is None:
             continue
-        buf = _fit(buf, n)
-        left, right = _pan_gains(t.pan)
-        out[:, 0] += buf[:, 0] * (t.vol * left)
-        out[:, 1] += buf[:, 1] * (t.vol * right)
+        vol, pan = (gains or {}).get(t.name, (t.vol, t.pan))
+        out += _apply_gain(_fit(buf, n), vol, pan)
     return out
+
+
+def _automated(owner, n: int, ctx: FxContext, beat_offset: float):
+    """Připraví automatizaci: nastaví křivky efektům, vrátí (vol, pan, fx).
+
+    Po zpracování je potřeba zavolat `clear_curves()` na vrácených efektech.
+    """
+    vol_a, pan_a, fx_autos = _resolve_automation(
+        owner.name, getattr(owner, "automations", []), owner.fx_chain)
+    args = (n, ctx.sr, ctx.bpm, ctx.beats_per_bar, beat_offset)
+    for fx, param, a in fx_autos:
+        fx.set_curve(param, a.sample(*args))
+    vol = vol_a.sample(*args).astype(np.float32) if vol_a else owner.vol
+    pan = pan_a.sample(*args) if pan_a else owner.pan
+    return vol, pan, [fx for fx, _, _ in fx_autos]
+
+
+def _render_automated(t, n, ctx, cache, beat_offset, gains: dict) -> np.ndarray:
+    vol, pan, touched = _automated(t, n, ctx, beat_offset)
+    try:
+        buf = render_track(t, n, ctx, cache, beat_offset)
+    finally:
+        for fx in touched:
+            fx.clear_curves()
+    gains[t.name] = (vol, pan)
+    return buf
 
 
 def limiter(audio: np.ndarray, threshold: float = LIMIT_THRESHOLD,
@@ -254,6 +295,7 @@ def render_song(song: Song, path: str | None = None, report: bool = True,
         lo_bar, hi_bar = bars
         hi_bar = min(int(hi_bar), song.bars) if hi_bar else song.bars
     beat_offset = lo_bar * song.beats_per_bar
+    ctx.beat_offset = beat_offset
     span_beats = max(0.0, (hi_bar - lo_bar) * song.beats_per_bar)
 
     tail = _tail_seconds(song, ctx)
@@ -262,6 +304,7 @@ def render_song(song: Song, path: str | None = None, report: bool = True,
 
     cache: dict = {}
     buffers: dict = {}
+    gains: dict = {}
 
     # dvě fáze: nejdřív stopy bez sidechainu, pak ty, které cizí stopu potřebují
     deferred = []
@@ -269,12 +312,12 @@ def render_song(song: Song, path: str | None = None, report: bool = True,
         if any(getattr(f, "needs_tracks", False) for f in t.fx_chain):
             deferred.append(t)
         else:
-            buffers[t.name] = render_track(t, n, ctx, cache, beat_offset)
+            buffers[t.name] = _render_automated(t, n, ctx, cache, beat_offset, gains)
     ctx.track_buffers = buffers
     for t in deferred:
-        buffers[t.name] = render_track(t, n, ctx, cache, beat_offset)
+        buffers[t.name] = _render_automated(t, n, ctx, cache, beat_offset, gains)
 
-    stereo = mix(buffers, song.tracks, n)
+    stereo = mix(buffers, song.tracks, n, gains)
     raw_peak = float(np.max(np.abs(stereo))) if stereo.size else 0.0
     audio = limiter(stereo)
 

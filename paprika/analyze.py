@@ -221,17 +221,93 @@ def _gaps(song: Song, warns: list) -> None:
                     "INFO", t.name, f"bars {a + 1}-{b - 1} ticho"))
 
 
+def _correlation(buf: np.ndarray) -> float | None:
+    """Korelace L/R stereo bufferu; None pro mono nebo ticho."""
+    buf = np.asarray(buf, dtype=np.float64)
+    if buf.ndim != 2 or buf.shape[1] != 2 or buf.shape[0] < 2:
+        return None
+    left, right = buf[:, 0], buf[:, 1]
+    denom = float(np.sqrt(np.sum(left ** 2) * np.sum(right ** 2)))
+    if denom <= 1e-12:
+        return None
+    return float(np.sum(left * right) / denom)
+
+
+def _mono_compat(song: Song, stereo_buffers: dict, warns: list) -> None:
+    """Stopa, jejíž levý a pravý kanál jdou proti sobě, se v mono vyruší."""
+    reported = 0
+    for t in song.tracks:
+        buf = stereo_buffers.get(t.name)
+        if buf is None:
+            continue
+        buf = np.asarray(buf)
+        if buf.ndim != 2 or db(np.sqrt(np.mean(buf ** 2))) < -50.0:
+            continue
+        corr = _correlation(buf)
+        if corr is not None and corr < 0.0:
+            warns.append(Warning_(
+                "WARN", t.name,
+                f"fázový rozpad v mono (korelace {corr:.2f}) — sniž Width/Chorus"))
+            reported += 1
+            if reported >= 3:
+                return
+
+
+def _moving_patch(patch) -> bool:
+    """Má patch něco, co zvuk hýbe v čase (modulace, round-robin, struna)?"""
+    if (getattr(patch, "vibrato", None) or getattr(patch, "tremolo", None)
+            or getattr(patch, "pitch_env", None) or getattr(patch, "drift", 0)
+            or getattr(patch, "rr", 1) > 1 or getattr(patch, "vel_to_cutoff", 0)):
+        return True
+    for f in getattr(patch, "filters", []):
+        if getattr(f, "lfo", None) is not None or getattr(f, "morph", None):
+            return True
+    for o in patch.osc:
+        if getattr(o, "pwm", None) is not None:
+            return True
+        if type(o).__name__ in ("Pluck", "SuperSaw", "Additive"):
+            return True
+    return False
+
+
+def _static_sound(song: Song, warns: list) -> None:
+    """Dlouhá melodická stopa bez jakéhokoli pohybu zní „plastově“."""
+    reported = 0
+    for t in song.tracks:
+        if isinstance(t, DrumTrack):
+            continue
+        notes = t.all_notes()
+        if not notes:
+            continue
+        span = _bar_of(song, notes[-1].start_beat) - _bar_of(song, notes[0].start_beat) + 1
+        if span <= 16:
+            continue
+        if (_moving_patch(t.patch) or getattr(t, "automations", None)
+                or getattr(t, "_humanized", False)):
+            continue
+        warns.append(Warning_(
+            "INFO", t.name,
+            f"statický zvuk přes {span} taktů — přidej vibrato/LFO, "
+            f"automate() nebo humanize()"))
+        reported += 1
+        if reported >= 3:
+            return
+
+
 def warnings_for(song: Song, audio: np.ndarray, buffers: dict,
                  raw_peak: float) -> list:
     """Všechna pravidla pohromadě, WARN před INFO."""
     warns: list = []
-    buffers = {k: _mono(v) for k, v in (buffers or {}).items()}
+    stereo_buffers = dict(buffers or {})
+    buffers = {k: _mono(v) for k, v in stereo_buffers.items()}
     _levels(song, audio, raw_peak, warns)
     _out_of_scale(song, warns)
     _masking(song, buffers, warns)
+    _mono_compat(song, stereo_buffers, warns)
     _robotic(song, warns)
     _dissonance(song, warns)
     _gaps(song, warns)
+    _static_sound(song, warns)
     warns.sort(key=lambda w: 0 if w.level == "WARN" else 1)
     return warns
 
@@ -275,6 +351,14 @@ def report(song: Song, audio: np.ndarray, buffers: dict, raw_peak: float,
         "BANDS    " + "  ".join(f"{BAND_NAMES[i]} {shares[i]:.0f}%"
                                 for i in range(3)) +
         f"      [{'ok' if balanced else 'zkontroluj'}]")
+    if audio.ndim == 2 and audio.shape[1] == 2 and audio.size:
+        mid = (audio[:, 0] + audio[:, 1]) * 0.5
+        side = (audio[:, 0] - audio[:, 1]) * 0.5
+        e_mid, e_side = float(np.sum(mid ** 2)), float(np.sum(side ** 2))
+        width = e_side / (e_mid + e_side) * 100.0 if e_mid + e_side > 0 else 0.0
+        corr = _correlation(audio)
+        lines.append(f"STEREO   šířka {width:.0f} %   korelace "
+                     f"{'—' if corr is None else f'{corr:.2f}'}")
 
     parts = []
     for t in song.tracks:

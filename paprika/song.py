@@ -181,6 +181,7 @@ class Track:
                  seed: int | None = None):
         """Rozhýbe časování (v beatech) a dynamiku (relativně) všech not."""
         rng = random.Random(seed)
+        self._humanized = True
         for clip in self.clips:
             for n in clip.notes:
                 if timing:
@@ -322,6 +323,7 @@ class DrumTrack(Track):
     def humanize(self, timing: float = 0.008, vel: float = 0.1,
                  seed: int | None = None):
         rng = random.Random(seed)
+        self._humanized = True
         for h in self.hits:
             if timing:
                 h.start_beat = max(0.0, h.start_beat + rng.uniform(-timing, timing))

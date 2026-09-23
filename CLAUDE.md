@@ -39,8 +39,8 @@ python -m paprika play   output/x.wav
 python -m paprika presets
 python -m paprika compare ref.mp3 output/x.wav          # mix metrics vs a reference
 
-python -m pytest tests/                                  # ~285 tests, ~15 s
-PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py     # renders every song, ~1 min
+python -m pytest tests/                                  # ~340 tests, ~25 s
+PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py     # renders every song, ~2 min
 python -m pytest tests/test_render.py::TestLimiter::test_tames_overs
 python -m unittest discover tests                        # pytest not required
 ```

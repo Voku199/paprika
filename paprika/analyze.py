@@ -137,19 +137,30 @@ def _levels(song: Song, audio: np.ndarray, raw_peak: float, warns: list) -> None
                               f"RMS {db(rms):.1f} dB — celé to zní moc potichu"))
 
 
+SILENT_BAR_DB = -80.0     # takt tišší než tohle se do maskování nepočítá
+MASKING_SHOWN = 4         # kolik nejdelších překryvů report vypíše jako WARN
+
+
 def _masking(song: Song, buffers: dict, warns: list) -> None:
     sr = song.sample_rate
     bar_samples = int(round(song.beats_per_bar * song.seconds_per_beat * sr))
     if bar_samples <= 0:
         return
     bars = song.bars
-    mats = {}
+    floor = 10.0 ** (SILENT_BAR_DB / 20.0)
+    mats, active = {}, {}
     for t in song.tracks:
         buf = buffers.get(t.name)
         if buf is None or not np.any(buf):
             continue
         mats[t.name] = _per_bar_bands(buf, sr, bar_samples, bars)
+        # numerický šum (třeba z konvoluce) v tichém taktu není hudba
+        active[t.name] = [
+            float(np.sqrt(np.mean(seg ** 2))) > floor if seg.size else False
+            for seg in (buf[b * bar_samples:(b + 1) * bar_samples]
+                        for b in range(bars))]
 
+    found = []
     names = list(mats)
     for i, a in enumerate(names):
         for b in names[i + 1:]:
@@ -157,22 +168,34 @@ def _masking(song: Song, buffers: dict, warns: list) -> None:
             for band in range(3):
                 hits = []
                 for bar in range(bars):
+                    if not (active[a][bar] and active[b][bar]):
+                        continue
                     ta, tb = ma[bar].sum(), mb[bar].sum()
                     if ta <= 0 or tb <= 0:
                         continue
                     if ma[bar][band] / ta > 0.4 and mb[bar][band] / tb > 0.4:
                         hits.append(bar)
                 # kratší překryv než tři takty nikoho netrápí
-                spans = [f"{lo}-{hi}" for lo, hi in _ranges(hits) if hi - lo >= 2]
-                if not spans:
-                    continue
-                lo_hz, hi_hz = BANDS[band]
-                shown = ", ".join(spans[:4])
-                if len(spans) > 4:
-                    shown += f" (+{len(spans) - 4})"
-                warns.append(Warning_(
-                    "WARN", f"{a} + {b}",
-                    f"maskování {int(lo_hz)}-{int(hi_hz)} Hz, bars {shown}"))
+                ranges = [(lo, hi) for lo, hi in _ranges(hits) if hi - lo >= 2]
+                if ranges:
+                    total = sum(hi - lo + 1 for lo, hi in ranges)
+                    found.append((total, a, b, band, ranges))
+
+    found.sort(key=lambda f: -f[0])
+    for total, a, b, band, ranges in found[:MASKING_SHOWN]:
+        lo_hz, hi_hz = BANDS[band]
+        spans = [f"{lo}-{hi}" for lo, hi in ranges]
+        shown = ", ".join(spans[:4])
+        if len(spans) > 4:
+            shown += f" (+{len(spans) - 4})"
+        warns.append(Warning_(
+            "WARN", f"{a} + {b}",
+            f"maskování {int(lo_hz)}-{int(hi_hz)} Hz, bars {shown}"))
+    if len(found) > MASKING_SHOWN:
+        warns.append(Warning_(
+            "INFO", "mix",
+            f"a dalších {len(found) - MASKING_SHOWN} maskování (vypsány "
+            f"{MASKING_SHOWN} nejdelší) — HighPass/EQ nebo pan pomůže"))
 
 
 def _robotic(song: Song, warns: list) -> None:

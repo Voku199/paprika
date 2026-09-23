@@ -18,7 +18,7 @@ from scipy import signal
 
 __all__ = ["KINDS", "LFO_SHAPES", "NOISE_COLORS", "biquad", "filt", "filt_varying",
            "res_to_q", "onepole", "lfo", "colored_noise", "karplus", "synth_ir",
-           "blep_saw"]
+           "blep_saw", "cached_ir", "convolve"]
 
 KINDS = ("lp", "hp", "bp", "notch", "peak", "lowshelf", "highshelf")
 Q_MIN, Q_MAX = 0.707, 12.0
@@ -287,3 +287,24 @@ def blep_saw(cycles, dt) -> np.ndarray:
     x = (t[hi] - 1.0) / dt[hi]
     y[hi] -= x * x + x + x + 1.0
     return y
+
+
+_IR_CACHE: dict = {}
+
+
+def cached_ir(seconds: float, sr: int, predelay: float = 0.02, damp: float = 0.5,
+              early: float = 0.3, seed: int = 0) -> np.ndarray:
+    """`synth_ir` s cache — stejná místnost se počítá jednou za běh."""
+    key = (round(float(seconds), 4), sr, round(float(predelay), 4),
+           round(float(damp), 4), round(float(early), 4), int(seed))
+    if key not in _IR_CACHE:
+        _IR_CACHE[key] = synth_ir(seconds, sr, predelay, damp, early, seed)
+    return _IR_CACHE[key]
+
+
+def convolve(x: np.ndarray, ir: np.ndarray) -> np.ndarray:
+    """Konvoluce useknutá na délku vstupu (overlap-add, rychlé i pro dlouhé skladby)."""
+    x = np.asarray(x, dtype=np.float64)
+    if x.shape[0] == 0 or ir.shape[0] == 0:
+        return np.zeros_like(x)
+    return signal.oaconvolve(x, np.asarray(ir, dtype=np.float64))[:x.shape[0]]

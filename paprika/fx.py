@@ -138,11 +138,13 @@ def _allpass(x: np.ndarray, d: int, g: float) -> np.ndarray:
 
 
 class Reverb(Fx):
-    """Schroeder / Freeverb: 8 paralelních comb filtrů, pak 4 allpassy.
+    """Dozvuk místnosti. `room` 0..1 určuje velikost, `damp` tlumení výšek,
+    `width` 0 = mono dozvuk, 1 = plně rozevřený.
 
-    Stereo: pravý kanál má délky combů posunuté o 23 samplů (jako Freeverb),
-    takže dozvuk je v každém uchu jiný. `width` 0 = mono dozvuk, 1 = plně
-    rozevřený.
+    `algo="conv"` (výchozí): konvoluce se syntetickou stereo impulzní odezvou
+    — přirozený prostor. `algo="freeverb"`: původní Schroeder/Freeverb z v1
+    (8 combů + 4 allpassy), kovovější a „retro“. Oba vstup sečtou do mono
+    a vrátí stereo dozvuk; hlasitost mokrého signálu je srovnaná.
     """
 
     STEREO = True
@@ -150,20 +152,34 @@ class Reverb(Fx):
     COMBS = (1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617)
     ALLPASS = (556, 441, 341, 225)
     STEREO_SPREAD = 23
+    ALGOS = ("conv", "freeverb")
+    CONV_WET = 10.0 ** (-8.0 / 20.0)   # srovná mokrý signál s Freeverbem
     AUTOMATABLE = ("mix",)
 
     def __init__(self, room: float = 0.6, mix: float = 0.3, damp: float = 0.4,
-                 width: float = 1.0, name: str | None = None):
+                 width: float = 1.0, name: str | None = None, algo: str = "conv"):
+        if algo not in self.ALGOS:
+            raise ValueError(f"neznámý algoritmus reverbu {algo!r}; k dispozici: "
+                             f"{', '.join(self.ALGOS)}")
         self.room = float(np.clip(room, 0.0, 1.0))
         self.mix = float(np.clip(mix, 0.0, 1.0))
         self.damp = float(np.clip(damp, 0.0, 1.0))
         self.width = float(np.clip(width, 0.0, 1.0))
         self.name = name
+        self.algo = algo
 
     def _feedback(self) -> float:
         return 0.70 + 0.28 * self.room
 
+    def _conv_decay(self) -> float:
+        return 0.3 + 4.7 * self.room ** 2
+
+    def _conv_predelay(self) -> float:
+        return 0.01 + 0.03 * self.room
+
     def tail(self, ctx: FxContext) -> float:
+        if self.algo == "conv":
+            return self._conv_decay() * 1.1 + self._conv_predelay()
         # doba, za kterou feedback klesne pod -60 dB
         fb = self._feedback()
         loop_sec = (max(self.COMBS) + self.STEREO_SPREAD) / 44100.0
@@ -185,6 +201,13 @@ class Reverb(Fx):
                            int((d + spread) * scale), 0.5)
         return np.asarray(wet, dtype=np.float32) * 0.35
 
+    def _conv_wet(self, src: np.ndarray, sr: int):
+        ir = dsp.cached_ir(self._conv_decay(), sr, self._conv_predelay(),
+                           self.damp, 0.3, 0)
+        wl = dsp.convolve(src, ir[:, 0]) * self.CONV_WET
+        wr = dsp.convolve(src, ir[:, 1]) * self.CONV_WET
+        return wl.astype(np.float32), wr.astype(np.float32)
+
     def process(self, buf, ctx):
         buf = np.asarray(buf, dtype=np.float32)
         mix = self.value("mix")
@@ -192,11 +215,15 @@ class Reverb(Fx):
             return buf
         m = _col(mix, buf)
         if buf.ndim == 1:
-            wet = self._wet(buf, ctx.sr, 0)
+            wet = (self._conv_wet(buf, ctx.sr)[0] if self.algo == "conv"
+                   else self._wet(buf, ctx.sr, 0))
             return ((1.0 - m) * buf + m * wet).astype(np.float32)
         src = buf.mean(axis=1)
-        wl = self._wet(src, ctx.sr, 0)
-        wr = self._wet(src, ctx.sr, self.STEREO_SPREAD)
+        if self.algo == "conv":
+            wl, wr = self._conv_wet(src, ctx.sr)
+        else:
+            wl = self._wet(src, ctx.sr, 0)
+            wr = self._wet(src, ctx.sr, self.STEREO_SPREAD)
         w1 = self.width / 2.0 + 0.5
         w2 = (1.0 - self.width) / 2.0
         wet = np.stack([wl * w1 + wr * w2, wr * w1 + wl * w2], axis=1)

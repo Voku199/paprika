@@ -52,6 +52,43 @@ class TestReverb(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(out)))
 
 
+class TestReverbAlgorithms(unittest.TestCase):
+    def setUp(self):
+        self.ctx = FxContext(sr=SR, bpm=120)
+
+    def test_default_is_convolution(self):
+        self.assertEqual(Reverb().algo, "conv")
+
+    def test_unknown_algo(self):
+        with self.assertRaises(ValueError) as cm:
+            Reverb(algo="plate")
+        self.assertIn("freeverb", str(cm.exception))
+
+    def test_both_algorithms_keep_old_guarantees(self):
+        for algo in Reverb.ALGOS:
+            rv = Reverb(room=0.7, mix=1.0, algo=algo)
+            out = rv.process(impulse(8 * SR), self.ctx)
+            loud = np.nonzero(np.abs(out) > 1e-4)[0]
+            self.assertLessEqual(float(loud[-1]) / SR, rv.tail(self.ctx) + 0.5, algo)
+            small = Reverb(room=0.2, mix=1.0, algo=algo).process(impulse(4 * SR), self.ctx)
+            big = Reverb(room=0.9, mix=1.0, algo=algo).process(impulse(4 * SR), self.ctx)
+            self.assertGreater(float(np.abs(big[2 * SR:]).sum()),
+                               float(np.abs(small[2 * SR:]).sum()), algo)
+
+    def test_conv_is_wide_and_level_matched(self):
+        x = np.random.default_rng(0).normal(0, 0.2, (4 * SR, 2)).astype(np.float32)
+        conv = Reverb(room=0.6, mix=1.0).process(x, self.ctx)[SR:]
+        fv = Reverb(room=0.6, mix=1.0, algo="freeverb").process(x, self.ctx)[SR:]
+        self.assertLess(abs(np.corrcoef(conv[:, 0], conv[:, 1])[0, 1]), 0.3)
+        diff_db = 20 * np.log10(np.sqrt(np.mean(conv ** 2)) / np.sqrt(np.mean(fv ** 2)))
+        self.assertLess(abs(diff_db), 3.0)
+
+    def test_width_zero_gives_mono_wet(self):
+        x = np.random.default_rng(1).normal(0, 0.2, (2 * SR, 2)).astype(np.float32)
+        y = Reverb(room=0.5, mix=1.0, width=0.0).process(x, self.ctx)
+        self.assertGreater(np.corrcoef(y[:, 0], y[:, 1])[0, 1], 0.95)
+
+
 class TestDelay(unittest.TestCase):
     def setUp(self):
         self.ctx = FxContext(sr=SR, bpm=120, beats_per_bar=4)

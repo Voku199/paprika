@@ -8,7 +8,6 @@ na orchestr, sbor a pady. Odezvy se cachují, stejná místnost se počítá jed
 from __future__ import annotations
 
 import numpy as np
-from scipy import signal
 
 from . import dsp
 from .fx import Fx, FxContext, _col
@@ -22,9 +21,6 @@ HALL_PRESETS = {
     "hall": (2.8, 0.03, 0.5),
     "cathedral": (6.0, 0.06, 0.6),
 }
-
-_IR_CACHE: dict = {}
-
 
 class Hall(Fx):
     """Konvoluční reverb. `preset` room / plate / hall / cathedral, `size`
@@ -54,12 +50,7 @@ class Hall(Fx):
         return self.decay * 1.1 + self.predelay
 
     def _ir(self, sr: int) -> np.ndarray:
-        key = (round(self.decay, 4), round(self.predelay, 4), round(self.damp, 4),
-               self.seed, sr)
-        if key not in _IR_CACHE:
-            _IR_CACHE[key] = dsp.synth_ir(self.decay, sr, self.predelay,
-                                          self.damp, early=0.3, seed=self.seed)
-        return _IR_CACHE[key]
+        return dsp.cached_ir(self.decay, sr, self.predelay, self.damp, 0.3, self.seed)
 
     def process(self, buf, ctx: FxContext):
         buf = np.asarray(buf, dtype=np.float32)
@@ -70,9 +61,9 @@ class Hall(Fx):
         ir = self._ir(ctx.sr)
         m = _col(mix, buf)
         if buf.ndim == 1:
-            wet = signal.fftconvolve(buf, ir[:, 0])[:n]
+            wet = dsp.convolve(buf, ir[:, 0])
         else:
-            wet = np.stack([signal.fftconvolve(buf[:, c], ir[:, c % 2])[:n]
+            wet = np.stack([dsp.convolve(buf[:, c], ir[:, c % 2])
                             for c in range(buf.shape[1])], axis=1)
         return ((1.0 - m) * buf + m * wet).astype(np.float32)
 

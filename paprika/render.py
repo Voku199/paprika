@@ -53,12 +53,33 @@ def _voice_cache_key(track: Track, freq: float, dur: float) -> tuple:
     return (track.patch.key(), round(freq, 4), round(dur, 5))
 
 
+def _fit(buf: np.ndarray, n: int) -> np.ndarray:
+    """Výstup efektu srovná na stereo `(n, 2)` float32."""
+    buf = np.asarray(buf, dtype=np.float32)
+    if buf.ndim == 1:
+        buf = np.repeat(buf[:, None], 2, axis=1)
+    buf = buf[:n]
+    if buf.shape[0] < n:
+        buf = np.concatenate([buf, np.zeros((n - buf.shape[0], 2), np.float32)])
+    return buf
+
+
+def _add(buf: np.ndarray, i: int, sample: np.ndarray, amp: float) -> None:
+    """Přičte mono nebo stereo sample do stereo bufferu od indexu `i`."""
+    n = buf.shape[0]
+    end = min(n, i + sample.shape[0])
+    if end <= i:
+        return
+    part = sample[:end - i] * amp
+    buf[i:end] += part[:, None] if part.ndim == 1 else part
+
+
 def render_track(track: Track, n: int, ctx: FxContext, cache: dict | None = None,
                  beat_offset: float = 0.0, apply_fx: bool = True) -> np.ndarray:
-    """Součet hlasů jedné stopy do mono bufferu délky `n` (bez vol/pan)."""
+    """Součet hlasů jedné stopy do stereo bufferu `(n, 2)` (bez vol/pan)."""
     sr = ctx.sr
     spb = 60.0 / ctx.bpm
-    buf = np.zeros(n, dtype=np.float32)
+    buf = np.zeros((n, 2), dtype=np.float32)
     cache = {} if cache is None else cache
 
     if isinstance(track, DrumTrack):
@@ -71,8 +92,7 @@ def render_track(track: Track, n: int, ctx: FxContext, cache: dict | None = None
                 continue
             sample = _drums.render_hit(hit.name, sr)
             amp = (max(1, min(127, hit.velocity)) / 127.0) ** 1.4
-            end = min(n, i + sample.size)
-            buf[i:end] += sample[:end - i] * amp
+            _add(buf, i, sample, amp)
     else:
         for note in track.all_notes():
             start = note.start_beat - beat_offset
@@ -86,17 +106,14 @@ def render_track(track: Track, n: int, ctx: FxContext, cache: dict | None = None
             key = _voice_cache_key(track, freq, dur)
             voice = cache.get(key)
             if voice is None:
-                voice = track.patch.voice(freq, dur, 127, sr)
+                voice = track.patch.voice(freq, dur, 127, sr, bpm=ctx.bpm)
                 cache[key] = voice
             amp = (max(1, min(127, note.velocity)) / 127.0) ** 1.6
-            end = min(n, i + voice.size)
-            buf[i:end] += voice[:end - i] * amp
+            _add(buf, i, voice, amp)
 
     if apply_fx:
         for effect in track.fx_chain:
-            buf = np.asarray(effect.process(buf, ctx), dtype=np.float32)[:n]
-            if buf.size < n:
-                buf = np.concatenate([buf, np.zeros(n - buf.size, dtype=np.float32)])
+            buf = _fit(effect.process(buf, ctx), n)
     return buf
 
 
@@ -107,15 +124,16 @@ def _pan_gains(pan: float) -> tuple[float, float]:
 
 
 def mix(track_buffers: dict, tracks: list, n: int) -> np.ndarray:
-    """Stopy -> stereo (n, 2) s equal-power panem a hlasitostí."""
+    """Stopy -> stereo (n, 2) s equal-power panem (balance) a hlasitostí."""
     out = np.zeros((n, 2), dtype=np.float32)
     for t in tracks:
         buf = track_buffers.get(t.name)
         if buf is None:
             continue
+        buf = _fit(buf, n)
         left, right = _pan_gains(t.pan)
-        out[:, 0] += buf[:n] * (t.vol * left)
-        out[:, 1] += buf[:n] * (t.vol * right)
+        out[:, 0] += buf[:, 0] * (t.vol * left)
+        out[:, 1] += buf[:, 1] * (t.vol * right)
     return out
 
 

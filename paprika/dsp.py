@@ -24,10 +24,13 @@ KINDS = ("lp", "hp", "bp", "notch", "peak", "lowshelf", "highshelf")
 Q_MIN, Q_MAX = 0.707, 12.0
 
 
-def res_to_q(res: float) -> float:
-    """Rezonance 0..1 -> Q 0.707 (Butterworth, bez špičky) .. 12 (skoro píská)."""
-    r = float(np.clip(res, 0.0, 1.0))
-    return Q_MIN * (Q_MAX / Q_MIN) ** r
+def res_to_q(res):
+    """Rezonance 0..1 -> Q 0.707 (Butterworth, bez špičky) .. 12 (skoro píská).
+
+    Bere skalár i pole (automatizace rezonance)."""
+    r = np.clip(np.asarray(res, dtype=np.float64), 0.0, 1.0)
+    q = Q_MIN * (Q_MAX / Q_MIN) ** r
+    return float(q) if q.ndim == 0 else q
 
 
 def biquad(kind: str, cutoff: float, sr: int, q: float = 0.707,

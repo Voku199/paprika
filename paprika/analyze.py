@@ -41,6 +41,12 @@ def db(x: float) -> float:
     return -99.0 if x < 1e-9 else float(20.0 * np.log10(x))
 
 
+def _mono(buf):
+    """Stereo buffer stopy -> mono pro analýzu (pravidla pracují s mono)."""
+    buf = np.asarray(buf)
+    return buf.mean(axis=1) if buf.ndim == 2 else buf
+
+
 def _fmt_db(x: float) -> str:
     v = db(x)
     return "-inf" if v <= -98.9 else f"{v:.1f}"
@@ -219,6 +225,7 @@ def warnings_for(song: Song, audio: np.ndarray, buffers: dict,
                  raw_peak: float) -> list:
     """Všechna pravidla pohromadě, WARN před INFO."""
     warns: list = []
+    buffers = {k: _mono(v) for k, v in (buffers or {}).items()}
     _levels(song, audio, raw_peak, warns)
     _out_of_scale(song, warns)
     _masking(song, buffers, warns)

@@ -49,8 +49,50 @@ class RenderResult:
 # stopy
 # --------------------------------------------------------------------------
 
-def _voice_cache_key(track: Track, freq: float, dur: float) -> tuple:
-    return (track.patch.key(), round(freq, 4), round(dur, 5))
+LEGATO_GAP = 1.0 / 64.0   # beaty: menší mezera mezi notami je ještě legato
+DEFAULT_SLIDE = 0.125     # beaty: délka glidu u `>` noty, když stopa nemá svůj
+
+
+def _phrases(track: Track) -> list[tuple]:
+    """Noty stopy -> fráze, z nichž každá je jeden syntetizovaný hlas.
+
+    Fráze = `(start_beat, dur_beats, velocity, path, glide_beats)`, kde
+    `path` je `((rel_beat, pitch), ...)`. Mono stopa slije navazující noty
+    do jedné fráze; polyfonní stopa dá každé notě vlastní frázi a nota
+    s `>` klouže z výšky předchozí noty.
+    """
+    notes = track.all_notes()
+    if getattr(track, "mono", False):
+        groups: list[dict] = []
+        for n in notes:
+            cur = groups[-1] if groups else None
+            if cur is not None and n.start_beat <= cur["end"] + LEGATO_GAP:
+                cur["path"].append((n.start_beat - cur["start"], n.pitch))
+                cur["end"] = n.end_beat
+                cur["slide"] = cur["slide"] or n.glide
+                continue
+            groups.append({"start": n.start_beat, "end": n.end_beat,
+                           "vel": n.velocity, "path": [(0.0, n.pitch)],
+                           "slide": False})
+        out = []
+        for c in groups:
+            glide = track.glide or (DEFAULT_SLIDE if c["slide"] else 0.0)
+            out.append((c["start"], c["end"] - c["start"], c["vel"],
+                        tuple(c["path"]), glide if len(c["path"]) > 1 else 0.0))
+        return out
+
+    out = []
+    prev = None
+    for n in notes:
+        if n.glide and prev is not None and prev.pitch != n.pitch:
+            path = ((0.0, prev.pitch), (0.0, n.pitch))
+            glide = track.glide or DEFAULT_SLIDE
+        else:
+            path = ((0.0, n.pitch),)
+            glide = 0.0
+        out.append((n.start_beat, n.dur_beats, n.velocity, path, glide))
+        prev = n
+    return out
 
 
 def _fit(buf: np.ndarray, n: int) -> np.ndarray:
@@ -94,21 +136,34 @@ def render_track(track: Track, n: int, ctx: FxContext, cache: dict | None = None
             amp = (max(1, min(127, hit.velocity)) / 127.0) ** 1.4
             _add(buf, i, sample, amp)
     else:
-        for note in track.all_notes():
-            start = note.start_beat - beat_offset
+        patch = track.patch
+        pkey = patch.key()
+        rr = max(1, int(getattr(patch, "rr", 1)))
+        for idx, (start_b, dur_b, vel, path, glide_b) in enumerate(_phrases(track)):
+            start = start_b - beat_offset
             if start < 0:
                 continue
             i = int(round(start * spb * sr))
             if i >= n:
                 continue
-            freq = midi_to_freq(note.pitch)
-            dur = max(0.01, note.dur_beats * spb)
-            key = _voice_cache_key(track, freq, dur)
+            freq = midi_to_freq(path[0][1])
+            dur = max(0.01, dur_b * spb)
+            gpath = (tuple((round(rel * spb, 6), round(midi_to_freq(p), 4))
+                           for rel, p in path) if len(path) > 1 else None)
+            gtime = round(glide_b * spb, 6)
+            rr_index = idx % rr
+            # jas podle velocity: kvantováno po 16, aby cache pořád fungovala
+            tone = (127 if not getattr(patch, "vel_to_cutoff", 0)
+                    else int(min(127, max(16, round(vel / 16) * 16))))
+            key = (pkey, round(freq, 4), round(dur, 5), rr_index, tone, gpath,
+                   gtime, ctx.bpm)
             voice = cache.get(key)
             if voice is None:
-                voice = track.patch.voice(freq, dur, 127, sr, bpm=ctx.bpm)
+                voice = patch.voice(freq, dur, 127, sr, bpm=ctx.bpm,
+                                    rr_index=rr_index, tone_vel=tone,
+                                    glide_path=gpath, glide_time=gtime)
                 cache[key] = voice
-            amp = (max(1, min(127, note.velocity)) / 127.0) ** 1.6
+            amp = (max(1, min(127, vel)) / 127.0) ** 1.6
             _add(buf, i, voice, amp)
 
     if apply_fx:

@@ -111,7 +111,9 @@ def _glide_curve(path, glide_time: float, n: int, sr: int) -> np.ndarray:
         return np.exp(target)
     tau = glide_time / 4.0
     g = 1.0 - math.exp(-1.0 / (tau * sr))
-    y, _ = signal.lfilter([g], [1.0, g - 1.0], target, zi=[target[0] * (1.0 - g)])
+    # start z výšky prvního bodu, i když cíl hned na začátku skočí jinam
+    first = math.log(max(1.0, float(pts[0][1])))
+    y, _ = signal.lfilter([g], [1.0, g - 1.0], target, zi=[first * (1.0 - g)])
     return np.exp(y)
 
 

@@ -54,7 +54,8 @@ class Track:
     """Jedna stopa: nástroj, klipy, efektový řetěz, hlasitost a pan."""
 
     def __init__(self, song: "Song", patch: Patch, name: str, vol: float = 0.8,
-                 pan: float = 0.0, chromatic: bool = False):
+                 pan: float = 0.0, chromatic: bool = False, mono: bool = False,
+                 glide: float = 0.0):
         self.song = song
         self.patch = patch
         self.name = name
@@ -63,6 +64,10 @@ class Track:
         self.chromatic = bool(chromatic)
         self.clips: list[Clip] = []
         self.fx_chain: list = []
+        # mono legato: překrývající se noty splynou do jednoho hlasu a výška
+        # mezi nimi klouže `glide` beatů (808, acid, sólové linky)
+        self.mono = bool(mono)
+        self.glide = float(glide)
 
     # -- pomocné ----------------------------------------------------------
     @property
@@ -82,7 +87,7 @@ class Track:
         out = []
         for clip in self.clips:
             for n, start in clip.absolute():
-                out.append(Note(n.pitch, start, n.dur_beats, n.velocity))
+                out.append(Note(n.pitch, start, n.dur_beats, n.velocity, n.glide))
         out.sort(key=lambda n: (n.start_beat, n.pitch))
         return out
 
@@ -193,8 +198,8 @@ class Track:
                   if lo_b <= clip.start_beat + n.start_beat < hi_b]
         for i in range(1, int(times) + 1):
             shift = self._bar_to_beat(span) * i
-            self._add(0.0, [Note(n.pitch, start + shift, n.dur_beats, n.velocity)
-                            for n, start in source])
+            self._add(0.0, [Note(n.pitch, start + shift, n.dur_beats, n.velocity,
+                                 n.glide) for n, start in source])
         return self
 
 
@@ -322,8 +327,14 @@ class Song:
         return f"{name}{i}"
 
     def track(self, instrument="epiano", vol: float = 0.8, pan: float = 0.0,
-              chromatic: bool = False, name: str | None = None) -> Track:
-        """Přidá stopu. `instrument` je jméno presetu nebo `Patch`."""
+              chromatic: bool = False, name: str | None = None,
+              mono: bool | None = None, glide: float | None = None,
+              fx=None) -> Track:
+        """Přidá stopu. `instrument` je jméno presetu nebo `Patch`.
+
+        `mono=True` zapne mono legato, `glide` je délka sklouznutí v beatech.
+        `fx` je seznam efektů, které se rovnou připojí.
+        """
         if isinstance(instrument, str):
             patch = preset(instrument)
             label = name or instrument
@@ -332,7 +343,11 @@ class Song:
             label = name or instrument.name
         else:
             raise TypeError("instrument musí být jméno presetu nebo Patch")
-        t = Track(self, patch, self._unique(label), vol, pan, chromatic)
+        t = Track(self, patch, self._unique(label), vol, pan, chromatic,
+                  mono=bool(mono) if mono is not None else False,
+                  glide=float(glide) if glide is not None else 0.0)
+        if fx:
+            t.fx(*fx)
         self.tracks.append(t)
         return t
 

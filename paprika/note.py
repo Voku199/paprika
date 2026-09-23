@@ -8,6 +8,7 @@ Gramatika jednoho tokenu::
     _:2            pauza
     ~:1            prodloužení předchozí noty o 1 beat
     C4:1@110       volitelná velocity za zavináčem
+    >G1:1          glide: nota doklouže z výšky předchozí noty
 
 Svislítko ``|`` odděluje takty a slouží jako kontrola délek: když součet
 délek v taktu nesedí na `beats_per_bar`, letí `NoteLengthError`.
@@ -25,7 +26,7 @@ __all__ = ["Note", "NoteLengthError", "NoteParseError", "parse", "DEFAULT_VELOCI
 DEFAULT_VELOCITY = 100
 
 _NOTE_RE = re.compile(
-    r"^(?P<name>[A-Ga-g][#b]?-?\d+)(?::(?P<dur>\d*\.?\d+))?(?:@(?P<vel>\d+))?$")
+    r"^(?P<glide>>)?(?P<name>[A-Ga-g][#b]?-?\d+)(?::(?P<dur>\d*\.?\d+))?(?:@(?P<vel>\d+))?$")
 _CHORD_RE = re.compile(
     r"^\((?P<body>[^)]*)\)(?::(?P<dur>\d*\.?\d+))?(?:@(?P<vel>\d+))?$")
 _REST_RE = re.compile(r"^[_.](?::(?P<dur>\d*\.?\d+))?$")
@@ -48,9 +49,11 @@ class Note:
     start_beat: float
     dur_beats: float
     velocity: int = DEFAULT_VELOCITY
+    glide: bool = False
 
     def copy(self) -> "Note":
-        return Note(self.pitch, self.start_beat, self.dur_beats, self.velocity)
+        return Note(self.pitch, self.start_beat, self.dur_beats, self.velocity,
+                    self.glide)
 
     @property
     def end_beat(self) -> float:
@@ -152,7 +155,8 @@ def parse(text: str, beats_per_bar: float = 4.0, default_dur: float = 1.0,
             if m:
                 dur = float(m.group("dur") or default_dur)
                 vel = int(m.group("vel") or velocity)
-                n = Note(_pitch(m.group("name")), cursor, dur, vel)
+                n = Note(_pitch(m.group("name")), cursor, dur, vel,
+                         glide=bool(m.group("glide")))
                 notes.append(n)
                 last = [n]
                 cursor += dur

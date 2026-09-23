@@ -79,5 +79,82 @@ class TestVarying(unittest.TestCase):
         self.assertLess(gain_db(s, x), -12)
 
 
+def zero_cross_freq(x, sr=SR):
+    s = np.signbit(x)
+    idx = np.nonzero(s[1:] != s[:-1])[0]
+    return (len(idx) / 2) / (x.size / sr)
+
+
+def acf_freq(x, sr=SR, fmin=50.0, fmax=2000.0):
+    """Výška tónu z autokorelace s parabolickou interpolací vrcholu."""
+    x = np.asarray(x, dtype=np.float64) - np.mean(x)
+    r = np.fft.irfft(np.abs(np.fft.rfft(x, 2 * x.size)) ** 2)[:x.size]
+    lo, hi = int(sr / fmax), int(sr / fmin)
+    k = lo + int(np.argmax(r[lo:hi]))
+    a, b, c = r[k - 1], r[k], r[k + 1]
+    return sr / (k + 0.5 * (a - c) / (a - 2 * b + c))
+
+
+class TestLfo(unittest.TestCase):
+    def test_shapes_range_and_rate(self):
+        for sh in dsp.LFO_SHAPES:
+            y = dsp.lfo(sh, 4.0, SR, SR, seed=1)
+            self.assertLessEqual(np.abs(y).max(), 1.0 + 1e-9, sh)
+        self.assertAlmostEqual(zero_cross_freq(dsp.lfo("sine", 4.0, SR, SR)), 4.0,
+                               delta=0.5)
+
+    def test_unknown_shape(self):
+        with self.assertRaises(ValueError):
+            dsp.lfo("wobble", 1, 10, SR)
+
+
+class TestNoiseAndPluck(unittest.TestCase):
+    def test_colors_spectral_tilt(self):
+        def hi_share(x):
+            sp = np.abs(np.fft.rfft(x)) ** 2
+            f = np.fft.rfftfreq(x.size, 1 / SR)
+            return sp[f > 4000].sum() / sp.sum()
+        w, p, b = (dsp.colored_noise(SR, c, seed=3) for c in ("white", "pink", "brown"))
+        self.assertGreater(hi_share(w), hi_share(p))
+        self.assertGreater(hi_share(p), hi_share(b))
+        self.assertLessEqual(np.abs(b).max(), 1.0)
+
+    def test_unknown_color(self):
+        with self.assertRaises(ValueError):
+            dsp.colored_noise(10, "blue")
+
+    def test_karplus_pitch(self):
+        # autokorelace: nejsilnější harmonická nemusí být základní tón
+        y = dsp.karplus(220.0, SR, SR, decay=2.0, bright=0.3)
+        self.assertAlmostEqual(acf_freq(y[2000:2000 + 8192]), 220.0, delta=220 * 0.01)
+        self.assertAlmostEqual(acf_freq(dsp.karplus(1318.5, SR, SR)[2000:10192]),
+                               1318.5, delta=1318.5 * 0.01)
+
+    def test_karplus_decays(self):
+        y = dsp.karplus(330.0, 2 * SR, SR, decay=0.5)
+        self.assertLess(np.abs(y[-2000:]).max(), 0.01)
+
+
+class TestIrAndBlep(unittest.TestCase):
+    def test_ir_shape_energy_decorrelation(self):
+        ir = dsp.synth_ir(1.5, SR, seed=2)
+        self.assertEqual(ir.shape[1], 2)
+        self.assertAlmostEqual(float((ir[:, 0].astype(np.float64) ** 2).sum()), 1.0,
+                               places=2)
+        self.assertLess(abs(np.corrcoef(ir[:, 0], ir[:, 1])[0, 1]), 0.3)
+
+    def test_ir_decays_60db(self):
+        ir = dsp.synth_ir(1.0, SR, predelay=0.0, early=0.0)
+        head = np.abs(ir[:2000]).max()
+        tail = np.abs(ir[int(1.0 * SR):]).max()
+        self.assertLess(tail, head * 10 ** (-50 / 20))
+
+    def test_blep_saw_bounded(self):
+        cyc = 110.0 * np.arange(SR) / SR
+        y = dsp.blep_saw(cyc, 110.0 / SR)
+        self.assertLessEqual(np.abs(y).max(), 1.1)
+        self.assertGreater(np.abs(y).max(), 0.9)
+
+
 if __name__ == "__main__":
     unittest.main()

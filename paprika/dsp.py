@@ -127,7 +127,7 @@ def _onepole_coef(cutoff: float, sr: int) -> float:
     return 1.0 - math.exp(-2.0 * math.pi * c / sr)
 
 
-def onepole(x, cutoff, sr: int, poles: int = 1, block: int = 64) -> np.ndarray:
+def onepole(x, cutoff, sr: int, poles: int = 1, block: int = 128) -> np.ndarray:
     """Jednopólový lowpass (6 dB/okt na pól), konstantní i proměnný cutoff."""
     y = np.asarray(x, dtype=np.float64)
     n = y.shape[0]

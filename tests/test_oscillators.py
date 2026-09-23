@@ -45,6 +45,14 @@ class TestFrequencyCurves(unittest.TestCase):
         fr = np.fft.rfftfreq(4096, 1 / SR)
         self.assertLess(sp[fr > 21000].sum() / sp.sum(), 0.01)
 
+    def test_harmonic_sum_matches_sine_series(self):
+        from paprika.oscillators import _harmonic_sum
+        cyc = 220.0 * np.arange(5000) / SR
+        ks = np.arange(1, 40)
+        w = 1.0 / ks
+        ref = sum(np.sin(2 * np.pi * k * cyc) * wk for k, wk in zip(ks, w))
+        np.testing.assert_allclose(_harmonic_sum(cyc, ks, w), ref, atol=1e-9)
+
     def test_phase_offset_changes_output(self):
         a = Saw().render(220.0, 1000, SR)
         b = Saw().render(220.0, 1000, SR, phase=0.3)

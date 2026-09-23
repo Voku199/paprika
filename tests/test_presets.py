@@ -49,6 +49,12 @@ class TestPresetCatalog(unittest.TestCase):
             self.assertLess(np.abs(y).max(), 1.0, n)
             self.assertGreater(np.abs(y).max(), 0.03, n)
 
+    def test_every_preset_below_unity_across_range(self):
+        for n in preset_names():
+            for f in (55.0, 110.0, 220.0, 440.0, 880.0):
+                peak = float(np.abs(preset(n).voice(f, 1.0, 127, SR)).max())
+                self.assertLess(peak, 1.0, f"{n} @ {f} Hz: {peak:.3f}")
+
     def test_presets_are_distinct(self):
         specs = {n: logspec(preset(n).voice(261.6, 0.8, 100, SR)) for n in NEW}
         for i, a in enumerate(NEW):

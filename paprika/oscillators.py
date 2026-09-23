@@ -23,6 +23,27 @@ TWO_PI = 2.0 * math.pi
 MAX_HARMONICS = 64
 
 
+def _harmonic_sum(cycles: np.ndarray, ks, weights) -> np.ndarray:
+    """Σ w_k · sin(2π k · cycles) bez volání sin pro každou harmonickou.
+
+    sin(kx) je imaginární část z^k, kde z = e^{ix}; z^k se počítá postupným
+    násobením (komplexní násobení je několikrát levnější než sin).
+    Předpoklad: `ks` rostou po stejném kroku (1, 2, 3… nebo 1, 3, 5…).
+    """
+    ks = np.asarray(ks, dtype=np.int64)
+    out = np.zeros(cycles.shape[0], dtype=np.float64)
+    if ks.size == 0:
+        return out
+    x = TWO_PI * np.asarray(cycles, dtype=np.float64)
+    step = np.exp(1j * x * (ks[1] - ks[0])) if ks.size > 1 else None
+    zk = np.exp(1j * x * ks[0])
+    for i, w in enumerate(weights):
+        out += w * zk.imag
+        if step is not None and i + 1 < ks.size:
+            zk *= step
+    return out
+
+
 class Osc:
     """Základ oscilátoru. `ratio` je poměr k základní frekvenci noty."""
 
@@ -71,10 +92,8 @@ class Saw(Osc):
     def render(self, freq, n, sr, phase=0.0):
         if self._fmax(freq) <= 0:
             return np.zeros(n, dtype=np.float32)
-        cyc = TWO_PI * self._cycles(freq, n, sr, phase)
-        out = np.zeros(n, dtype=np.float64)
-        for k in range(1, self._harmonics(freq, sr) + 1):
-            out -= np.sin(k * cyc) / k
+        ks = np.arange(1, self._harmonics(freq, sr) + 1)
+        out = _harmonic_sum(self._cycles(freq, n, sr, phase), ks, -1.0 / ks)
         out *= 2.0 / math.pi
         return out.astype(np.float32)
 
@@ -89,10 +108,8 @@ class Square(Osc):
     def render(self, freq, n, sr, phase=0.0):
         if self._fmax(freq) <= 0:
             return np.zeros(n, dtype=np.float32)
-        cyc = TWO_PI * self._cycles(freq, n, sr, phase)
-        out = np.zeros(n, dtype=np.float64)
-        for k in range(1, self._harmonics(freq, sr) + 1, 2):
-            out += np.sin(k * cyc) / k
+        ks = np.arange(1, self._harmonics(freq, sr) + 1, 2)
+        out = _harmonic_sum(self._cycles(freq, n, sr, phase), ks, 1.0 / ks)
         out *= 4.0 / math.pi
         return np.clip(out, -1.0, 1.0).astype(np.float32)
 
@@ -104,12 +121,9 @@ class Tri(Osc):
     def render(self, freq, n, sr, phase=0.0):
         if self._fmax(freq) <= 0:
             return np.zeros(n, dtype=np.float32)
-        cyc = TWO_PI * self._cycles(freq, n, sr, phase)
-        out = np.zeros(n, dtype=np.float64)
-        sign = 1.0
-        for k in range(1, self._harmonics(freq, sr, cap=32) + 1, 2):
-            out += sign * np.sin(k * cyc) / (k * k)
-            sign = -sign
+        ks = np.arange(1, self._harmonics(freq, sr, cap=32) + 1, 2)
+        signs = np.where(np.arange(ks.size) % 2 == 0, 1.0, -1.0)
+        out = _harmonic_sum(self._cycles(freq, n, sr, phase), ks, signs / (ks * ks))
         out *= 8.0 / (math.pi ** 2)
         return out.astype(np.float32)
 

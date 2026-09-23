@@ -142,7 +142,7 @@ def _cello_solo() -> Patch:
         adsr=ADSR(0.12, 0.4, 0.8, 0.6),
         filter=Formant("o", voice="bass", gain=2.5),
         vibrato=LFO(5.0, 0.15, delay=0.25),
-        drift=4.0, gain=1.6, name="cello_solo")
+        drift=4.0, gain=1.2, name="cello_solo")
 
 
 def _brass_section() -> Patch:
@@ -315,7 +315,7 @@ def _string_stab() -> Patch:
         osc=[SuperSaw(voices=5, detune=0.2, spread=0.6, seed=6), Saw(2.0, amp=0.2)],
         adsr=ADSR(0.005, 0.25, 0.35, 0.35),
         filter=[LP(1800, env=0.6), Formant("e", gain=1.2)], rr=2,
-        gain=2.5, name="string_stab")
+        gain=2.0, name="string_stab")
 
 
 def _pwm_pad() -> Patch:

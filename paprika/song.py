@@ -18,7 +18,8 @@ from .note import Note
 from .patch import Patch
 from .presets import preset
 
-__all__ = ["Song", "Track", "DrumTrack", "Bus", "Clip", "suppress_render"]
+__all__ = ["Song", "Track", "DrumTrack", "SfxTrack", "Bus", "Clip",
+           "suppress_render"]
 
 # Když skladbu importuje CLI, `Song.render()` uvnitř souboru se má chovat jako
 # no-op — jinak by se renderovalo dvakrát. CLI si tenhle přepínač zapíná samo.
@@ -339,6 +340,67 @@ class DrumTrack(Track):
         return self
 
 
+class SfxTrack(DrumTrack):
+    """Stopa cinematic efektů: riser, impact, braam, subdrop, reverse swell,
+    whoosh. Dědí z `DrumTrack`, takže ji analýza i vizualizace berou jako
+    stopu úderů. Délky jsou v taktech/beatech a sedí na hrany taktů.
+    """
+
+    def __init__(self, song: "Song", name: str = "sfx", vol: float = 0.6,
+                 pan: float = 0.0):
+        super().__init__(song, name, vol, pan)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<SfxTrack {self.name} hits={len(self.hits)}>"
+
+    def _put(self, name, start_beat, vel, params=(), dur_beats=0.0):
+        from .sfx import SfxHit
+        self.hits.append(SfxHit(name, float(start_beat), int(vel), params, dur_beats))
+        return self
+
+    def riser(self, to_bar: float, bars: float = 2, kind: str = "noise",
+              vel: int = 110):
+        """Nájezd, který skončí přesně na začátku taktu `to_bar`."""
+        from .sfx import RISER_KINDS
+        if kind not in RISER_KINDS:
+            raise ValueError(f"neznámý druh riseru {kind!r}; k dispozici: "
+                             f"{', '.join(RISER_KINDS)}")
+        beats = float(bars) * self.bpb
+        return self._put("riser", self._bar_to_beat(to_bar) - beats, vel,
+                         (kind, beats), beats)
+
+    def impact(self, bar: float, beat: float = 0.0, size: float = 1.0,
+               vel: int = 115):
+        """Trailerová rána: sub boom + crack + dlouhý ocas."""
+        return self._put("impact", self._bar_to_beat(bar) + beat, vel, (float(size),))
+
+    def braam(self, bar: float, pitch="D2", bars: float = 2, vel: int = 110):
+        """Žesťová „braam“ rána (Inception) na daném tónu."""
+        midi = theory.pitch(pitch)
+        beats = float(bars) * self.bpb
+        return self._put("braam", self._bar_to_beat(bar), vel, (int(midi), beats), beats)
+
+    def subdrop(self, bar: float, beat: float = 0.0, vel: int = 110):
+        """Klesající sub (65 → 28 Hz) — pod drop nebo impact."""
+        return self._put("subdrop", self._bar_to_beat(bar) + beat, vel)
+
+    def reverse_swell(self, to_bar: float, beats: float = 2.0, vel: int = 100):
+        """Obrácený činel/dozvuk, který vyvrcholí na začátku `to_bar`."""
+        return self._put("reverse_swell", self._bar_to_beat(to_bar) - float(beats),
+                         vel, (float(beats),), float(beats))
+
+    def whoosh(self, bar: float, beats: float = 1.0, beat: float = 0.0,
+               vel: int = 100):
+        """Průlet šumu zleva doprava."""
+        return self._put("whoosh", self._bar_to_beat(bar) + beat, vel,
+                         (float(beats),), float(beats))
+
+    def humanize(self, timing: float = 0.0, vel: float = 0.1,
+                 seed: int | None = None):
+        """Rozhýbe jen velocity — časování SFX musí sedět na hrany taktů."""
+        return super().humanize(timing=0.0, vel=vel, seed=seed)
+
+
 class Bus:
     """Sběrnice: sečte své stopy, prožene je vlastním fx řetězem a pošle dál.
 
@@ -457,6 +519,12 @@ class Song:
         """Přidá stopu bicích. `kit`: classic, trap, cinematic, breakbeat,
         industrial, lofi."""
         t = DrumTrack(self, self._unique(name), vol, pan, kit=kit)
+        self.tracks.append(t)
+        return t
+
+    def sfx(self, vol: float = 0.6, pan: float = 0.0, name: str = "sfx") -> SfxTrack:
+        """Přidá stopu cinematic efektů (riser, impact, braam, ...)."""
+        t = SfxTrack(self, self._unique(name), vol, pan)
         self.tracks.append(t)
         return t
 

@@ -10,7 +10,8 @@ import numpy as np
 
 from . import theory
 from .drums import DRUM_CHARS
-from .song import DrumTrack, Song
+from .sfx import SFX_CHARS
+from .song import DrumTrack, SfxTrack, Song
 
 __all__ = ["piano_roll", "waveform", "LABEL_WIDTH"]
 
@@ -58,7 +59,17 @@ def piano_roll(song: Song, bars=None, res: int = 8) -> str:
     rows = [header]
     for t in song.tracks:
         cells = ["."] * total
-        if isinstance(t, DrumTrack):
+        if isinstance(t, SfxTrack):
+            # SFX: symbol na začátku, '-' přes délku; symbol nepřepíše jiný
+            for h in t.hits:
+                i = onset(h.start_beat)
+                end = idx(h.start_beat + max(0.0, h.dur_beats) - 1e-9)
+                for j in range(max(i + 1, 0), min(end + 1, total)):
+                    if cells[j] == ".":
+                        cells[j] = "-"
+                if 0 <= i < total and cells[i] in ".-":
+                    cells[i] = SFX_CHARS.get(h.name, "*")
+        elif isinstance(t, DrumTrack):
             for h in t.hits:
                 i = onset(h.start_beat)
                 if 0 <= i < total:

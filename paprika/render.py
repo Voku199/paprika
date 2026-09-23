@@ -14,7 +14,8 @@ from . import drums as _drums
 from .automation import resolve as _resolve_automation
 from .fx import FxContext
 from .patch import midi_to_freq
-from .song import Bus, DrumTrack, Song, Track
+from . import sfx as _sfx
+from .song import Bus, DrumTrack, SfxTrack, Song, Track
 
 __all__ = ["render_song", "render_track", "mix", "limiter", "write_wav",
            "RenderResult"]
@@ -51,6 +52,7 @@ class RenderResult:
 # stopy
 # --------------------------------------------------------------------------
 
+SFX_TAIL = 4.0            # sekundy: nejdelší doznění SFX (impact, braam)
 LEGATO_GAP = 1.0 / 64.0   # beaty: menší mezera mezi notami je ještě legato
 DEFAULT_SLIDE = 0.125     # beaty: délka glidu u `>` noty, když stopa nemá svůj
 
@@ -126,7 +128,17 @@ def render_track(track: Track, n: int, ctx: FxContext, cache: dict | None = None
     buf = np.zeros((n, 2), dtype=np.float32)
     cache = {} if cache is None else cache
 
-    if isinstance(track, DrumTrack):
+    if isinstance(track, SfxTrack):
+        for hit in track.hits:
+            start = hit.start_beat - beat_offset
+            if start < 0:
+                continue
+            i = int(round(start * spb * sr))
+            if i >= n:
+                continue
+            sample = _sfx.render_sfx(hit.name, hit.params, sr, ctx.bpm)
+            _add(buf, i, sample, (max(1, min(127, hit.velocity)) / 127.0) ** 1.4)
+    elif isinstance(track, DrumTrack):
         for hit in track.hits:
             start = hit.start_beat - beat_offset
             if start < 0:
@@ -313,6 +325,8 @@ def _tail_seconds(song: Song, ctx: FxContext) -> float:
     for t in song.tracks:
         fx_tail = sum(f.tail(ctx) for f in t.fx_chain)
         release = getattr(getattr(t.patch, "adsr", None), "r", 0.3) or 0.0
+        if isinstance(t, SfxTrack) and t.hits:
+            release = max(release, SFX_TAIL)
         tail = max(tail, fx_tail + release + 0.3)
     bus_tail = max((sum(f.tail(ctx) for f in b.fx_chain) for b in song.buses),
                    default=0.0)

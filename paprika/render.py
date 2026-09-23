@@ -67,17 +67,28 @@ def _phrases(track: Track) -> list[tuple]:
     """
     notes = track.all_notes()
     if getattr(track, "mono", False):
+        # navazující nota jiné výšky (nebo s `>`) pokračuje v tomtéž hlasu;
+        # stejná výška bez `>` se znovu udeří (808 pattern nesmí splynout)
         groups: list[dict] = []
+        prev_pitch = None
         for n in notes:
             cur = groups[-1] if groups else None
-            if cur is not None and n.start_beat <= cur["end"] + LEGATO_GAP:
+            touching = cur is not None and n.start_beat <= cur["end"] + LEGATO_GAP
+            same = cur is not None and cur["path"][-1][1] == n.pitch
+            if touching and (not same or n.glide):
                 cur["path"].append((n.start_beat - cur["start"], n.pitch))
                 cur["end"] = n.end_beat
                 cur["slide"] = cur["slide"] or n.glide
-                continue
-            groups.append({"start": n.start_beat, "end": n.end_beat,
-                           "vel": n.velocity, "path": [(0.0, n.pitch)],
-                           "slide": False})
+            elif n.glide and prev_pitch is not None and prev_pitch != n.pitch:
+                groups.append({"start": n.start_beat, "end": n.end_beat,
+                               "vel": n.velocity,
+                               "path": [(0.0, prev_pitch), (0.0, n.pitch)],
+                               "slide": True})
+            else:
+                groups.append({"start": n.start_beat, "end": n.end_beat,
+                               "vel": n.velocity, "path": [(0.0, n.pitch)],
+                               "slide": False})
+            prev_pitch = n.pitch
         out = []
         for c in groups:
             glide = track.glide or (DEFAULT_SLIDE if c["slide"] else 0.0)

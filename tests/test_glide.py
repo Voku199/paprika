@@ -45,6 +45,29 @@ class TestPhrases(unittest.TestCase):
         self.assertEqual(ph[0][4], 0.25)
         self.assertAlmostEqual(ph[0][1], 2.0)
 
+    def test_mono_same_pitch_retriggers(self):
+        # 808 pattern: opakovaná nota se musí znovu udeřit, ne splynout
+        s = Song(bars=1)
+        t = s.track("subbass", mono=True, glide=0.25)
+        t.notes("D1:1.5 D1:0.5 D1:2")
+        self.assertEqual(len(_phrases(t)), 3)
+
+    def test_mono_same_pitch_with_glide_mark_merges(self):
+        s = Song(bars=1)
+        t = s.track("subbass", mono=True)
+        t.notes("D1:2 >D1:2")
+        self.assertEqual(len(_phrases(t)), 1)
+
+    def test_mono_glide_after_rest_slides_from_previous(self):
+        s = Song(bars=1)
+        t = s.track("subbass", mono=True, glide=0.25)
+        t.notes("C2:1 _:1 >G2:2")
+        ph = _phrases(t)
+        self.assertEqual(len(ph), 2)
+        self.assertEqual(ph[1][3][0][1], 36)
+        self.assertEqual(ph[1][3][-1][1], 43)
+        self.assertGreater(ph[1][4], 0)
+
     def test_poly_glide_note(self):
         s = Song(bars=1)
         t = s.track("lead")

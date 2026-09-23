@@ -7,7 +7,7 @@ Každá sada je slovník `jméno nástroje -> f(sr) -> mono float64` při veloci
 | sada       | charakter                                                    |
 |------------|--------------------------------------------------------------|
 | classic    | zvuk v1 — neutrální elektronické bicí                        |
-| trap       | 808 kick s dlouhým ocasem, ostrý snare/clap, těsné hi-haty   |
+| trap       | punchy 808 kick s klikem, ostrý snare/clap, těsné hi-haty    |
 | cinematic  | orchestrální basový buben, taiko (`b`), field snare, gong    |
 | breakbeat  | punchy „akustický“ kick, praskavý snare, živé hi-haty (Moby) |
 | industrial | zkreslené, kovové, bitcrushnuté                               |
@@ -237,9 +237,10 @@ _TRAP_METAL = (205.3, 304.4, 369.6, 522.7, 540.0, 800.0)
 
 
 def _trap_kick(sr):
-    n = int(0.9 * sr)
-    body = _sweep(sr, 0.9, 180.0, 48.0, 0.025, 0.45, drive=2.0)
-    click = _hp(_noise(n, 101), 3000.0, sr) * _env(n, sr, 0.003) * 0.3
+    # punchy: krátký sub ocas, výrazný klik — dlouhý 808 ocas dělá z mixu kaši
+    n = int(0.7 * sr)
+    body = _sweep(sr, 0.7, 200.0, 52.0, 0.02, 0.3, drive=2.5)
+    click = _hp(_noise(n, 101), 3000.0, sr) * _env(n, sr, 0.004) * 0.5
     return _finish(body + click, sr, 0.92)
 
 

@@ -30,6 +30,7 @@ from .fx_dyn import Compressor, Gate
 from .fx_lofi import BitCrush, Tape
 from .fx_space import Chorus, Hall, Width
 from .kits import kit_names
+from .mastering import MASTERING_STYLES, mastering
 from .note import DEFAULT_VELOCITY, Note, NoteLengthError, NoteParseError, parse
 from .patch import (ADSR, BP, FM, HP, LFO, LP, Additive, Ensemble, Formant, Noise, Osc,
                     Patch, PitchEnv, Pluck, Pulse, Saw, Sine, Square, SuperSaw,
@@ -61,7 +62,7 @@ __all__ = [
     # efekty
     "Fx", "Reverb", "Hall", "Delay", "LowPass", "HighPass", "Filter", "EQ",
     "Saturate", "Sidechain", "Compressor", "Gate", "Chorus", "Width",
-    "BitCrush", "Tape",
+    "BitCrush", "Tape", "mastering", "MASTERING_STYLES",
     # render a zpětná vazba
     "render_song", "RenderResult", "mix", "limiter", "write_wav",
     "report", "warnings_for", "band_energy", "piano_roll", "waveform",

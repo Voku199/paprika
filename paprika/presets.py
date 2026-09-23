@@ -10,8 +10,9 @@ Některé mají doporučené výchozí nastavení stopy (`PRESET_DEFAULTS`, nap�
 
 from __future__ import annotations
 
-from .patch import (ADSR, BP, FM, LFO, LP, Additive, Formant, Noise, Patch,
-                    PitchEnv, Pluck, Pulse, Saw, Sine, Square, SuperSaw, Tri)
+from .patch import (ADSR, BP, FM, LFO, LP, Additive, Ensemble, Formant, Noise,
+                    Patch, PitchEnv, Pluck, Pulse, Saw, Sine, Square, SuperSaw,
+                    Tri)
 
 __all__ = ["PRESETS", "PRESET_TAGS", "PRESET_DEFAULTS", "preset", "preset_names",
            "preset_fx", "presets_by_tag", "tag_names"]
@@ -27,6 +28,7 @@ def _epiano() -> Patch:
         filter=LP(4200, env=0.25),
         gain=0.62,
         name="epiano",
+        drift=3.0, rr=3,
     )
 
 
@@ -38,12 +40,16 @@ def _warmpad() -> Patch:
         filter=LP(1700, env=0.35),
         gain=0.5,
         name="warmpad",
+        drift=4.0, rr=2, ensemble=Ensemble(3, 8.0, 0.8, 0.02),
     )
 
 
 def _subbass() -> Patch:
     return Patch(
-        osc=[Sine(1.0, amp=1.0), Sine(2.0, amp=0.18), Tri(1.0, amp=0.12)],
+        # víc 2. a 3. harmonické: basa je slyšet i na malých reproduktorech
+        # a nepřetěžuje sub pod 60 Hz
+        osc=[Sine(1.0, amp=0.6), Sine(2.0, amp=0.5), Sine(3.0, amp=0.2),
+             Tri(1.0, amp=0.12)],
         adsr=ADSR(0.008, 0.25, 0.85, 0.16),
         filter=LP(600, env=0.4),
         gain=0.68,
@@ -58,6 +64,7 @@ def _pluck() -> Patch:
         filter=LP(2600, env=0.85),
         gain=0.7,
         name="pluck",
+        drift=3.0, rr=4,
     )
 
 
@@ -69,6 +76,7 @@ def _lead() -> Patch:
         filter=LP(3200, env=0.45),
         gain=0.6,
         name="lead",
+        drift=4.0, rr=2,
     )
 
 
@@ -80,6 +88,7 @@ def _strings() -> Patch:
         filter=LP(2400, env=0.3),
         gain=0.45,
         name="strings",
+        drift=4.0, rr=2, ensemble=Ensemble(4, 10.0, 0.8, 0.02),
     )
 
 
@@ -92,6 +101,7 @@ def _bell() -> Patch:
         filter=None,
         gain=0.6,
         name="bell",
+        drift=2.0, rr=3,
     )
 
 
@@ -103,6 +113,7 @@ def _organ() -> Patch:
         filter=LP(5200),
         gain=0.42,
         name="organ",
+        drift=3.0, rr=2,
     )
 
 
@@ -114,11 +125,12 @@ def _strings_ens() -> Patch:
     # sekce smyčců: unison rozladěných pil, formant „a“ dává dřevo těla,
     # vibrato nastoupí až po chvíli jako u živých hráčů
     return Patch(
-        osc=[SuperSaw(voices=5, detune=0.18, spread=0.7, seed=1), Saw(2.0, amp=0.1)],
+        osc=[SuperSaw(voices=2, detune=0.06, spread=0.0, seed=1), Saw(2.0, amp=0.1)],
         adsr=ADSR(0.35, 0.5, 0.85, 1.2),
         filter=[LP(3200, res=0.1), Formant("a", gain=1.5)],
         vibrato=LFO(5.2, 0.12, delay=0.3),
-        rr=3, gain=1.6, name="strings_ens")
+        ensemble=Ensemble(6, 12.0, 0.9, 0.03),
+        rr=3, gain=0.95, name="strings_ens")
 
 
 def _strings_short() -> Patch:
@@ -152,6 +164,7 @@ def _brass_section() -> Patch:
         adsr=ADSR(0.06, 0.3, 0.75, 0.4),
         filter=LP(900, env=1.0, res=0.15),
         vel_to_cutoff=0.7, vibrato=LFO(5.5, 0.06, delay=0.4),
+        ensemble=Ensemble(3, 8.0, 0.6, 0.015),
         gain=0.55, name="brass_section")
 
 
@@ -160,7 +173,8 @@ def _horn_swell() -> Patch:
         osc=[Saw(1.0, amp=0.6), Square(0.5, amp=0.3, width=0.4)],
         adsr=ADSR(0.8, 0.5, 0.9, 1.0),
         filter=[LP(700, env=0.5), Formant("o", gain=2.0)],
-        vibrato=LFO(4.8, 0.05, delay=0.6), gain=1.0, name="horn_swell")
+        vibrato=LFO(4.8, 0.05, delay=0.6), ensemble=Ensemble(2, 6.0, 0.5, 0.02),
+        gain=0.75, name="horn_swell")
 
 
 def _harp() -> Patch:
@@ -183,25 +197,27 @@ def _timpani_tone() -> Patch:
 # choir
 # --------------------------------------------------------------------------
 
-def _choir(vowel: str, name: str, extra_lp: float | None = None) -> Patch:
+def _choir(vowel: str, name: str, extra_lp: float | None = None,
+           gain: float = 1.0) -> Patch:
     filters = [Formant(vowel, gain=3.0)]
     if extra_lp:
         filters.append(LP(extra_lp))
     return Patch(
-        osc=[SuperSaw(voices=4, detune=0.12, spread=0.6, seed=3),
+        osc=[SuperSaw(voices=2, detune=0.05, spread=0.0, seed=3),
              Noise(amp=0.03, color="pink")],
         adsr=ADSR(0.4, 0.5, 0.9, 1.2),
         filter=filters,
         vibrato=LFO(5.0, 0.1, delay=0.2), drift=6.0, rr=3,
-        gain=1.0, name=name)
+        ensemble=Ensemble(5, 14.0, 0.9, 0.04),
+        gain=gain, name=name)
 
 
 def _choir_ooh() -> Patch:
-    return _choir("u", "choir_ooh")
+    return _choir("u", "choir_ooh", gain=0.85)
 
 
 def _choir_aah() -> Patch:
-    return _choir("a", "choir_aah")
+    return _choir("a", "choir_aah", gain=0.55)
 
 
 def _choir_mm() -> Patch:
@@ -312,10 +328,11 @@ def _acid() -> Patch:
 def _string_stab() -> Patch:
     # Moby: krátký smyčcový „stab“ s dozvukem
     return Patch(
-        osc=[SuperSaw(voices=5, detune=0.2, spread=0.6, seed=6), Saw(2.0, amp=0.2)],
+        osc=[SuperSaw(voices=2, detune=0.08, spread=0.0, seed=6), Saw(2.0, amp=0.2)],
         adsr=ADSR(0.005, 0.25, 0.35, 0.35),
         filter=[LP(1800, env=0.6), Formant("e", gain=1.2)], rr=2,
-        gain=2.0, name="string_stab")
+        ensemble=Ensemble(3, 10.0, 0.7, 0.01),
+        gain=1.5, name="string_stab")
 
 
 def _pwm_pad() -> Patch:
@@ -323,7 +340,8 @@ def _pwm_pad() -> Patch:
         osc=[Pulse(width=0.5, pwm=LFO(0.3, 0.35, "tri")),
              Pulse(1.004, width=0.5, pwm=LFO(0.23, 0.3, "tri", seed=1))],
         adsr=ADSR(0.8, 1.0, 0.8, 1.8),
-        filter=LP(1600, lfo=LFO(0.1, 0.5)), gain=0.4, name="pwm_pad")
+        filter=LP(1600, lfo=LFO(0.1, 0.5)), ensemble=Ensemble(3, 10.0, 1.0, 0.01),
+        gain=0.28, name="pwm_pad")
 
 
 def _air_pad() -> Patch:
@@ -356,10 +374,11 @@ def _glass_pad() -> Patch:
 
 def _shimmer_pad() -> Patch:
     return Patch(
-        osc=[SuperSaw(voices=5, detune=0.1, spread=0.9, seed=7), Sine(2.0, amp=0.3),
+        osc=[SuperSaw(voices=2, detune=0.05, spread=0.0, seed=7), Sine(2.0, amp=0.3),
              Sine(4.0, amp=0.1)],
         adsr=ADSR(1.5, 1.0, 0.85, 3.0),
-        filter=LP(4000, lfo=LFO(0.12, 0.6)), gain=0.5, name="shimmer_pad")
+        filter=LP(4000, lfo=LFO(0.12, 0.6)), ensemble=Ensemble(3, 8.0, 1.0, 0.02),
+        gain=0.5, name="shimmer_pad")
 
 
 def _round_bass() -> Patch:

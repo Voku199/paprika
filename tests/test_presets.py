@@ -74,6 +74,33 @@ class TestPresetCatalog(unittest.TestCase):
             self.assertTrue(moving, n)
 
 
+class TestAntiChip(unittest.TestCase):
+    SECTIONS = ("strings_ens", "choir_ooh", "choir_aah", "choir_mm", "brass_section",
+                "horn_swell", "pwm_pad", "shimmer_pad", "string_stab", "warmpad",
+                "strings")
+    V1_MELODIC = ("epiano", "warmpad", "pluck", "lead", "strings", "bell", "organ")
+
+    def test_sections_have_ensemble_and_stereo(self):
+        for n in self.SECTIONS:
+            p = preset(n)
+            self.assertIsNotNone(p.ensemble, n)
+            y = p.voice(261.6, 0.5, 100, SR)
+            self.assertEqual(y.ndim, 2, n)
+            self.assertLess(np.corrcoef(y[:, 0], y[:, 1])[0, 1], 0.95, n)
+
+    def test_v1_melodic_presets_move(self):
+        for n in self.V1_MELODIC:
+            p = preset(n)
+            self.assertGreater(p.drift, 0, n)
+            self.assertGreaterEqual(p.rr, 2, n)
+
+    def test_subbass_not_pure_sub(self):
+        y = preset("subbass").voice(55.0, 1.0, 100, SR)
+        sp = np.abs(np.fft.rfft(y * np.hanning(y.size))) ** 2
+        f = np.fft.rfftfreq(y.size, 1 / SR)
+        self.assertLess(sp[f < 60].sum() / sp.sum(), 0.7)
+
+
 class TestPresetDefaults(unittest.TestCase):
     def test_808_defaults_and_fx(self):
         s = Song(bars=1)

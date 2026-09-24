@@ -279,6 +279,8 @@ def _mono_compat(song: Song, stereo_buffers: dict, warns: list) -> None:
 
 def _moving_patch(patch) -> bool:
     """Má patch něco, co zvuk hýbe v čase (modulace, round-robin, struna)?"""
+    if getattr(patch, "sampled", False):
+        return True               # nahrávka skutečného nástroje žije sama
     if (getattr(patch, "vibrato", None) or getattr(patch, "tremolo", None)
             or getattr(patch, "pitch_env", None) or getattr(patch, "drift", 0)
             or getattr(patch, "rr", 1) > 1 or getattr(patch, "vel_to_cutoff", 0)):
@@ -314,6 +316,29 @@ def _static_sound(song: Song, warns: list) -> None:
             f"statický zvuk přes {span} taktů — přidej vibrato/LFO, "
             f"automate() nebo humanize()"))
         reported += 1
+        if reported >= 3:
+            return
+
+
+def _sample_range(song: Song, warns: list) -> None:
+    """Nota mimo rozsah nahraného nástroje se natahuje a zní nepřirozeně."""
+    reported = 0
+    for t in song.tracks:
+        patch = getattr(t, "patch", None)
+        if not getattr(patch, "sampled", False):
+            continue
+        lo, hi = patch.range
+        for n in t.all_notes():
+            if lo <= n.pitch <= hi:
+                continue
+            warns.append(Warning_(
+                "WARN", t.name,
+                f"bar {_bar_of(song, n.start_beat)}: {theory.note_name(n.pitch)} "
+                f"je mimo rozsah nástroje ({theory.note_name(lo)}–"
+                f"{theory.note_name(hi)}) — vzorek se natáhne a zní "
+                f"nepřirozeně; transponuj o oktávu"))
+            reported += 1
+            break                 # jedna hláška na stopu
         if reported >= 3:
             return
 
@@ -360,6 +385,7 @@ def warnings_for(song: Song, audio: np.ndarray, buffers: dict,
     _dissonance(song, warns)
     _gaps(song, warns)
     _static_sound(song, warns)
+    _sample_range(song, warns)
     warns.sort(key=lambda w: 0 if w.level == "WARN" else 1)
     return warns
 

@@ -1,4 +1,4 @@
-"""Paprika — psaní a render skladeb z Pythonu, bez DAW, VST a samplů.
+"""Paprika — psaní a render skladeb z Pythonu, bez DAW a VST.
 
 Typické použití::
 
@@ -16,6 +16,10 @@ Typické použití::
     fx.riser(to_bar=8, bars=2).impact(8)
     s.render("output/skica.wav")
 
+Skutečné nástroje (koncertní křídlo, smyčce, dechy, žestě) hraje sampler
+z volně licencovaných nahrávek: `python -m paprika samples install all`,
+pak `s.track("grand_piano")`, `s.track("violins.pizz")`.
+
 Paprika není generátor hudby: melodii, harmonii a strukturu píše autor.
 Knihovna dává teorii, syntézu, efekty, mix a zpětnou vazbu.
 """
@@ -30,6 +34,8 @@ from .fx_dyn import Compressor, Gate
 from .fx_lofi import BitCrush, Tape
 from .fx_space import Chorus, Hall, Width
 from .kits import kit_names
+from .library import (INSTRUMENTS, SamplesMissing, instrument, instrument_names,
+                      samples_root)
 from .mastering import MASTERING_STYLES, mastering
 from .note import DEFAULT_VELOCITY, Note, NoteLengthError, NoteParseError, parse
 from .patch import (ADSR, BP, FM, HP, LFO, LP, Additive, Ensemble, Formant, Noise, Osc,
@@ -38,13 +44,14 @@ from .patch import (ADSR, BP, FM, HP, LFO, LP, Additive, Ensemble, Formant, Nois
 from .presets import (PRESET_TAGS, PRESETS, preset, preset_fx, preset_names,
                       presets_by_tag, tag_names)
 from .render import RenderResult, limiter, mix, render_song, write_wav
+from .sampler import SampleError, Sampler
 from .sfx import SFX_NAMES
 from .song import Bus, Clip, DrumTrack, SfxTrack, Song, Track
 from .theory import (CHORDS, SCALES, TheoryError, arp, chord, in_scale, invert,
                      note_name, pitch, scale, scale_pcs)
 from .viz import piano_roll, waveform
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 __all__ = [
     # model
@@ -59,6 +66,8 @@ __all__ = [
     "midi_to_freq",
     "preset", "preset_names", "preset_fx", "presets_by_tag", "tag_names",
     "PRESETS", "PRESET_TAGS",
+    "Sampler", "SampleError", "SamplesMissing", "instrument",
+    "instrument_names", "samples_root", "INSTRUMENTS",
     # efekty
     "Fx", "Reverb", "Hall", "Delay", "LowPass", "HighPass", "Filter", "EQ",
     "Saturate", "Sidechain", "Compressor", "Gate", "Chorus", "Width",

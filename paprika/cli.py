@@ -115,6 +115,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="porovná mix metriky souborů (render vs. reference mp3/wav)")
     cp.add_argument("files", nargs="+", help="wav/mp3 soubory; první je základ")
 
+    sm = sub.add_parser(
+        "samples",
+        help="skutečné nástroje (piano, smyčce, ...): stav a instalace vzorků")
+    smsub = sm.add_subparsers(dest="samples_cmd")
+    si = smsub.add_parser("install", help="stáhne a připraví vzorky skupiny")
+    si.add_argument("group", help="piano, strings, winds, brass, mallets nebo all")
+
     pr = sub.add_parser("presets", help="vypíše presety, bicí sady a SFX")
     pr.add_argument("--tag", help="jen presety s tagem (orchestral, choir, ...)")
     return p
@@ -166,6 +173,17 @@ def main(argv=None) -> int:
                     raise CliError(str(e))
                 rows.append((os.path.basename(path), summary(audio, sr)))
             print(format_table(rows))
+        elif args.cmd == "samples":
+            if getattr(args, "samples_cmd", None) == "install":
+                from . import install as _install
+                try:
+                    names = _install.install(args.group)
+                except _install.InstallError as e:
+                    raise CliError(str(e))
+                print(f"hotovo: {', '.join(names)}")
+            else:
+                from .library import status_lines
+                print("\n".join(status_lines()))
         elif args.cmd == "presets":
             from .drums import DRUM_CHARS
             from .kits import kit_names
@@ -183,6 +201,10 @@ def main(argv=None) -> int:
                 print("bicí znaky: " + ", ".join(f"{k} = {v}"
                                                  for k, v in DRUM_CHARS.items()))
                 print("sfx:        " + ", ".join(SFX_NAMES))
+                from .library import INSTRUMENTS, is_installed
+                print("sampled:    " + ", ".join(
+                    n + ("" if is_installed(n) else "*") for n in INSTRUMENTS)
+                    + "   (* = nenainstalováno: python -m paprika samples)")
     except CliError as e:
         print(f"chyba: {e}", file=sys.stderr)
         return 2

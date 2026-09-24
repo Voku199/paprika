@@ -50,7 +50,8 @@ VSCO 2 Community Edition (smyčce, dechy, žestě, mallets, upright_piano)
   Ivy Audio). Licence: CC0 1.0 — kredit není povinný, ale je vítaný.
   https://github.com/sgossner/VSCO-2-CE
 """
-TARGET_RMS_DB = -18.0     # max RMS nejhlasitější vrstvy prostředního kořene
+TARGET_RMS_DB = -18.0     # medián max RMS nejhlasitější vrstvy přes kořeny
+PEAK_CEILING = 0.9        # žádný vzorek nejhlasitější vrstvy nad tuhle špičku
 # VSCO pojmenovává většinu složek s C3 = střední C (výška z jména + 12);
 # tyhle používají C4 = 60. Změřeno detekcí výšky všech složek 2026-09-24.
 VSCO_OCTAVE_ZERO = ("Keys/Upright Nr1", "Strings/Harp",
@@ -118,21 +119,33 @@ def plan_regions(entries) -> list[dict]:
     return out
 
 
-def _loudest_rms_db(regions: list, base: str) -> float:
-    """Max RMS (100 ms okna) nejhlasitější vrstvy u prostředního kořene."""
+def _normalize_db(regions: list, base: str) -> float:
+    """Hlasitost `<global> volume` pro vygenerované SFZ.
+
+    Medián max RMS (100 ms okna) přes kořeny nejhlasitější vrstvy míří na
+    `TARGET_RMS_DB`; zároveň žádný vzorek té vrstvy nesmí přesáhnout
+    špičku `PEAK_CEILING` (krátké staccato má malé RMS a velkou špičku).
+    """
     top = max(r["hivel"] for r in regions)
-    layer = [r for r in regions if r["hivel"] == top]
-    roots = sorted({r["pitch_keycenter"] for r in layer})
-    mid = roots[len(roots) // 2]
-    r = next(r for r in layer if r["pitch_keycenter"] == mid)
-    sr, data = load_wav(os.path.join(base, *r["sample"].split("/")))
-    x = to_float(data[: sr * 4]).mean(axis=1)
-    win = max(1, int(0.1 * sr))
-    n = (x.size // win) * win
-    if n == 0:
-        return TARGET_RMS_DB
-    rms = float(np.sqrt(np.mean(x[:n].reshape(-1, win) ** 2, axis=1)).max())
-    return 20.0 * math.log10(max(rms, 1e-6))
+    first = {}
+    for r in regions:
+        if r["hivel"] == top:
+            first.setdefault(r["pitch_keycenter"], r)
+    levels, peaks = [], []
+    for r in first.values():
+        sr, data = load_wav(os.path.join(base, *r["sample"].split("/")))
+        x = to_float(data[: sr * 4]).mean(axis=1)
+        peaks.append(float(np.abs(x).max()) if x.size else 0.0)
+        win = max(1, int(0.1 * sr))
+        n = (x.size // win) * win
+        if n:
+            rms = float(np.sqrt(np.mean(x[:n].reshape(-1, win) ** 2, axis=1)).max())
+            levels.append(20.0 * math.log10(max(rms, 1e-6)))
+    volume = TARGET_RMS_DB - (float(np.median(levels)) if levels else TARGET_RMS_DB)
+    loudest = max(peaks, default=0.0)
+    if loudest > 0.0:
+        volume = min(volume, 20.0 * math.log10(PEAK_CEILING / loudest))
+    return volume
 
 
 def write_sfz(inst: Instrument, art: str, root: str) -> str:
@@ -161,7 +174,7 @@ def write_sfz(inst: Instrument, art: str, root: str) -> str:
             r["loop_end"] = int(n * LOOP_END)
         elif inst.is_one_shot(art):
             r["loop_mode"] = "one_shot"
-    volume = TARGET_RMS_DB - _loudest_rms_db(regions, base)
+    volume = _normalize_db(regions, base)
     veltrack = 100 if len({r["lovel"] for r in regions}) == 1 else 40
     lines = ["// vygenerováno Paprikou z VSCO 2 CE (CC0) — neupravuj, přepíše se",
              "<control> default_path=../",

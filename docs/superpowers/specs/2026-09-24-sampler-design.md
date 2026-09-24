@@ -171,8 +171,11 @@ Sampler(sfz_path, name=None, legato=False, undamped_from=None, gain_db=0.0)
   - výdrže (smyčce, dechy, žestě kromě one_shot): `loop_mode=loop_continuous`,
     `loop_start` = 45 %, `loop_end` = 90 % délky vzorku;
     `ampeg_release` 0.3 s (smyčce, dechy), 0.25 s žestě, 0.4 s pianino;
-  - normalizace: `<global> volume` tak, aby RMS nejhlasitější vrstvy
-    prostředního kořene bylo −20 dBFS.
+  - normalizace: `<global> volume` tak, aby medián max RMS (100 ms okna)
+    nejhlasitější vrstvy přes všechny kořeny byl −18 dBFS a žádný vzorek
+    té vrstvy nepřesáhl špičku 0.9 (jeden prostřední kořen se na
+    skutečných vzorcích ukázal nespolehlivý — staccato žestí až 2.8).
+    Salamander má pevný `gain_db` −4.6 dB (C4v16 na −18 dBFS).
 - Manifest `<root>/paprika_samples.json` (skupiny, zdroj, commit, datum) a
   `<root>/CREDITS.txt` s licencemi a povinným kreditem.
 - Chyby sítě → `InstallError` s URL a radou („spusť znovu, pokračuje“).

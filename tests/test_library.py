@@ -118,5 +118,33 @@ class TestLibrary(unittest.TestCase):
         self.assertIn("[chybí]", text)            # piano pořád chybí
 
 
+class TestNormalization(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.root = self.tmp.name
+
+    def tearDown(self):
+        clear_cache()
+        self.tmp.cleanup()
+
+    def test_uneven_roots_never_clip(self):
+        """Jeden hlasitý kořen mezi tichými nesmí po normalizaci přebuzit."""
+        from sample_fixture import midi_freq, sine_wav
+        folder = os.path.join(self.root, "vsco2", "Strings", "Violin Section", "Spic")
+        for n, pitch, amp in (("A2", 57, 0.02), ("C3", 60, 0.02), ("E3", 64, 0.9),
+                              ("G3", 67, 0.02), ("B3", 71, 0.02)):
+            sine_wav(os.path.join(folder, f"VlnEns_Spic_{n}_v1_rr1.wav"),
+                     midi_freq(pitch), 44100, 0.4, amp)
+        inst = library.INSTRUMENTS["violins"]
+        s = library.Sampler(write_sfz(inst, "spic", self.root))
+        peaks = []
+        for p in (57, 60, 64, 67, 71):
+            r = s.select(p, 127)[0]
+            peaks.append(np.abs(s.voice(r, p, 0.3, 44100) * s.gain(r, 127)).max())
+        self.assertLessEqual(max(peaks), 0.9 + 1e-3)
+        # typický (medián) kořen je pořád slyšet, ne utlumený kvůli výjimce
+        self.assertGreater(float(np.median(peaks)), 0.01)
+
+
 if __name__ == "__main__":
     unittest.main()

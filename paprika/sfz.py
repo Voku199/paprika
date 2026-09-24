@@ -140,10 +140,13 @@ def _region(ops: dict, base_dir: str, default_path: str,
     r = Region(sample=os.path.normpath(os.path.join(base_dir, rel)))
     ignored = []
     # `key` nastaví i keycenter, takže musí přijít před pitch_keycenter
-    for name, value in sorted(ops.items(), key=lambda kv: kv[0] != "key"):
+    for name, full in sorted(ops.items(), key=lambda kv: kv[0] != "key"):
+        if name == "sample":
+            continue
+        # jen první slovo: skutečné knihovny mívají za hodnotou smetí
+        # (Salamander: „pitch_keycenter=102 tune-27“)
+        value = full.split()[0] if full.split() else ""
         try:
-            if name == "sample":
-                continue
             if name == "key":
                 r.lokey = r.hikey = r.keycenter = note_number(value)
             elif name == "pitch_keycenter":
@@ -152,15 +155,15 @@ def _region(ops: dict, base_dir: str, default_path: str,
             elif name in ("lokey", "hikey"):
                 setattr(r, name, note_number(value))
             elif name in _INT:
-                setattr(r, _INT[name], int(float(value.split()[0])))
+                setattr(r, _INT[name], int(float(value)))
             elif name in _FLOAT:
-                setattr(r, _FLOAT[name], float(value.split()[0]))
+                setattr(r, _FLOAT[name], float(value))
             elif name in ("loop_mode", "trigger"):
-                setattr(r, name, value.split()[0].lower())
+                setattr(r, name, value.lower())
             else:
                 ignored.append(name)
-        except (ValueError, IndexError) as e:
-            raise SfzError(f"{source}: opcode {name}={value!r} má neplatnou "
+        except ValueError as e:
+            raise SfzError(f"{source}: opcode {name}={full!r} má neplatnou "
                            f"hodnotu") from e
     r.ignored = tuple(sorted(ignored))
     return r

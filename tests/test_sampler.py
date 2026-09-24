@@ -112,6 +112,16 @@ class TestSampler(unittest.TestCase):
         self.assertEqual(len(s.regions), 1)
         self.assertEqual(len(s.select(60, 100)), 1)
 
+    def test_regions_without_keys_ignored(self):
+        # Salamander: pedálový šum spouští CC64, ne klávesa (lokey=-1 hikey=-1)
+        s = Sampler(write(os.path.join(self.dir, "cc.sfz"),
+                          "<region> sample=wav dir/s_60_v1_rr1.wav key=60\n"
+                          "<group> lokey=-1 hikey=-1 on_locc64=126\n"
+                          "<region> sample=wav dir/s_64_v1_rr1.wav\n"))
+        self.assertEqual(len(s.regions), 1)
+        self.assertEqual(s.range, (60, 60))
+        self.assertEqual(s.select(10, 100)[0].keycenter, 60)
+
     def test_layered_regions_play_together(self):
         s = Sampler(write(os.path.join(self.dir, "layer.sfz"),
                           "<region> sample=wav dir/s_60_v1_rr1.wav key=60\n"

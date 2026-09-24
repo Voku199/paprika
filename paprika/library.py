@@ -20,7 +20,7 @@ GROUPS = ("piano", "strings", "winds", "brass", "mallets")
 SHORT_ARTS = ("pizz", "spic", "stac")
 SALAMANDER_SFZ = ("salamander/SalamanderGrandPianoV3_44.1khz16bit/"
                   "SalamanderGrandPianoV3Retuned.sfz")
-GRAND_GAIN_DB = 0.0   # kalibrace v Task 7: max RMS C4v16 -> -18 dBFS
+GRAND_GAIN_DB = -4.6  # max RMS C4v16 (-13.4 dBFS) -> -18 dBFS, změřeno 2026-09-24
 
 
 class SamplesMissing(RuntimeError):

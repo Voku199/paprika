@@ -147,7 +147,11 @@ class Sampler:
             regions = _sfz.load(self.path)
         except _sfz.SfzError as e:
             raise SampleError(str(e)) from e
-        self.regions = [r for r in regions if r.trigger in ("attack", "first")]
+        # hratelné klávesou: release regiony a regiony bez kláves (pedálový
+        # šum spouštěný CC, lokey=-1) sampler nehraje
+        self.regions = [r for r in regions
+                        if r.trigger in ("attack", "first") and r.hikey >= 0
+                        and r.lokey <= r.hikey]
         if not self.regions:
             raise SampleError(f"SFZ nemá žádné hratelné regiony: {self.path}")
         self.name = name or os.path.splitext(os.path.basename(self.path))[0]

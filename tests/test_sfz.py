@@ -82,6 +82,12 @@ class TestParse(unittest.TestCase):
         self.assertEqual((r.offset, r.seq_length, r.seq_position, r.pan, r.transpose),
                          (100, 2, 2, -50.0, -12))
 
+    def test_junk_after_value_is_ignored(self):
+        # Salamander Retuned má překlep „pitch_keycenter=102 tune-27“
+        r = parse("<region> sample=a.wav lokey=101 junk hikey=c8 x "
+                  "pitch_keycenter=102 tune-27", "/")[0]
+        self.assertEqual((r.lokey, r.hikey, r.keycenter), (101, 108, 102))
+
     def test_unknown_opcodes_are_listed(self):
         r = parse("<region> sample=a.wav cutoff=500 fil_type=lpf_2p", "/")[0]
         self.assertEqual(r.ignored, ("cutoff", "fil_type"))

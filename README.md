@@ -1,7 +1,7 @@
 # Paprika
 
 Konzolová Python knihovna, která umožňuje napsat a vyrenderovat písničku bez
-DAW, bez VST pluginů a bez samplů. Napíšeš soubor `songs/*.py`, spustíš
+DAW a bez VST pluginů. Napíšeš soubor `songs/*.py`, spustíš
 `python -m paprika render` a dostaneš hotový `.wav` plus textovou analýzu,
 podle které poznáš, co se povedlo a co ne.
 
@@ -11,9 +11,9 @@ a zpětnou vazbu.
 
 **Engine v2** (stereo, modulace, glide, automatizace, sběrnice, konvoluční
 hall, sbor, bicí sady, cinematic SFX, 37 presetů) míří na temný cinematic /
-dark-pop soundtrack ve stylu Arcane. Pořád je to čistá syntéza — orchestr
-zní „syntetický orchestr“, ne nahrávka; realistické smyčce přinese až
-sampler (plánovaný podprojekt).
+dark-pop soundtrack ve stylu Arcane. **Sampler** (v2.1) k tomu přidává
+skutečné nástroje z nahrávek — koncertní křídlo, smyčce, dechy, žestě,
+mallets — viz [Skutečné nástroje](#skutečné-nástroje-sampler).
 
 ## Instalace
 
@@ -124,6 +124,54 @@ lead.fx(LowPass(300, res=0.5)).automate("lowpass.cutoff",
                                         [(8, 300), (16, 8000)], "exp")
 s.master.automate("vol", [(0, 1), (15.875, 0), (16, 1)], "step")  # díra před dropem
 ```
+
+## Skutečné nástroje (sampler)
+
+Syntéza neumí znít jako piano v divadle nebo housle. Na to má Paprika
+sampler, který přehrává nahrávky skutečných nástrojů (SFZ + WAV, žádná
+závislost navíc). Vzorky se stáhnou jednou, mimo repo:
+
+```bash
+python -m paprika samples                  # stav, cesta, nástroje a artikulace
+python -m paprika samples install all      # ~2.3 GB; nebo piano|strings|winds|brass|mallets
+```
+
+Vzorky leží v `%LOCALAPPDATA%\paprika\samples` (jinde `~/.paprika/samples`),
+jinam přes proměnnou `PAPRIKA_SAMPLES`. Instalace pokračuje, kde skončila.
+
+| Skupina | Nástroje (`jméno.artikulace`, první je výchozí) |
+|---|---|
+| piano | `grand_piano` (Yamaha C5, 16 dynamik), `upright_piano` |
+| strings | `violins`, `violas`, `celli` (`sus trem pizz spic`), `violin_solo` (`sus trem pizz spic`), `contrabass` (`sus nv trem pizz spic`), `concert_harp` |
+| winds | `flute` (`sus nv exp stac`), `oboe` (`sus nv stac`), `clarinet` (`sus stac`), `bassoon` (`sus vib stac`) |
+| brass | `horn` (`sus stac mute`), `trumpet` (`sus vib stac mute`), `trombone` (`sus vib stac`), `tuba` (`sus stac`) |
+| mallets | `marimba`, `glockenspiel`, `xylophone` |
+
+```python
+piano = s.track("grand_piano", fx="default")        # Hall
+piano.notes("(D2 A2 F3):4", bar=0).pedal(bars=(0, 8), every=1)
+violin = s.track("violin_solo", fx="default")       # sólo = mono = legato
+violin.melody("A4:2 >D5:1 E5:1 | F5:4", bar=8)
+s.track("celli.pizz").notes("D3:1 _:1 A2:1 _:1", bar=8)
+```
+
+- **Velocity mění barvu**, ne jen hlasitost (dynamické vrstvy nahrávky):
+  piano 16 vrstev, smyčce 2–3. Piš dynamiku 40–115, ne všude 100.
+- **Pedál** `t.pedal(bars=(od, do), every=1)` — nota, která skončí při
+  sešlápnutí, zní do uvolnění; `every` přešlápne se změnou harmonie.
+  Funguje i na syntetizovaných stopách.
+- **Legato** — sólové nástroje (`violin_solo`, `contrabass`, dechy, žestě)
+  jsou mono: navazující noty se prolnou bez nového nasazení smyčce.
+  Na polyfonní stopě legato zapne `>` před notou nebo `mono=True`.
+- **Round robin** — opakovaná nota vezme jinou nahrávku, nezní jako kulomet.
+- **Rozsah** — nota mimo rozsah nahrávek se natáhne a zní nepřirozeně;
+  report hlásí `mimo rozsah` s taktem a rozsahem nástroje.
+- **Vlastní knihovny**: `s.track(Sampler("cesta/k/nastroji.sfz", legato=True))`.
+- Ukázka: `songs/divadlo.py` (křídlo + smyčce + harfa + roh).
+
+**Licence:** VSCO 2 CE je CC0. Salamander Grand Piano je **CC-BY 3.0** —
+ve hře uveď v titulcích „Salamander Grand Piano V3 by Alexander Holm,
+licensed under CC-BY 3.0“. Znění je i v `CREDITS.txt` ve složce vzorků.
 
 ## Nástroje
 
@@ -242,6 +290,9 @@ v2_showcase.wav               11.0%  26.9%  36.2%  24.1%   0.9% ...  19.2%
 Retro / 16bitový dojem dělá strojová přesnost a úzký, basově přetížený mix.
 Co pomáhá (měřeno proti referencím):
 
+- **Nahrané nástroje** — piano, smyčce, dechy a žestě ze sampleru
+  (`grand_piano`, `violins`, ...) místo syntetických presetů; syntéza ať
+  dělá pady, basy a elektroniku.
 - **Sekce místo sólisty** — smyčce, sbor, žesťe, pady přes `Ensemble`
   (presety `strings_ens`, `choir_*`, `brass_section`, `warmpad`, … ho mají).
 - **Žádná rychlá arpeggia** 1/16 na pluck/square — to je podpis čipové
@@ -324,11 +375,15 @@ paprika/
   fx_space.py     Hall, Chorus, Width
   fx_dyn.py       Compressor, Gate
   fx_lofi.py      BitCrush, Tape
+  sfz.py          SFZ text -> regiony (hlavičky, #define, #include)
+  sampler.py      Sampler: vrstvy, round robin, smyčky, legato, mmap WAV
+  library.py      katalog samplovaných nástrojů, cesta ke vzorkům
+  install.py      stažení Salamander + VSCO 2 CE, generování SFZ
   render.py       stopy -> busy -> master -> stereo buffer -> WAV
   analyze.py    mix report + hudební warningy
   reference.py  analýza externí nahrávky (tempo/key/akordy/dynamika)
   viz.py        ASCII piano roll + obálka mixu
-  cli.py        python -m paprika render|show|play|presets|analyze-ref
+  cli.py        python -m paprika render|show|play|presets|samples|analyze-ref|compare
 ```
 
 Hranice jsou naschvál ostré: `render.py` neví nic o hudební teorii,
@@ -340,14 +395,17 @@ model. Noty žijí v beatech, ne v sekundách — změna BPM je jeden parametr.
 ```bash
 python -m pytest tests/
 python -m unittest discover tests
-PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py   # vyrenderuje všechny songy
+PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py        # vyrenderuje všechny songy
+PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # nainstalované vzorky: úroveň, ladění
 ```
+
+Ostatní testy sampleru běží bez sítě nad malými syntetickými WAV.
 
 `songs/v2_showcase.py` je poslechová ukázka všech novinek v2.
 
 ## Co v2 neobsahuje
 
-Sampler (SFZ knihovny), export do hry (smyčky, stemy, vrstvy intenzity,
+Export do hry (smyčky, stemy, vrstvy intenzity,
 stingery), žánrové style packy a Claude Code skill `/paprika` — to jsou další
 podprojekty. Dál chybí zpěv, MIDI, změny tempa uprostřed skladby a
 automatizace na úrovni jednotlivé noty.

@@ -1,7 +1,7 @@
 # Paprika — sampler skutečných nástrojů (podprojekt 4, posunutý dopředu)
 
 **Datum:** 2026-09-24
-**Stav:** schváleno („Ano, souhlasím … stáhni to a provozni to“)
+**Stav:** implementováno 2026-09-24 (schváleno: „Ano, souhlasím … stáhni to a provozni to“)
 **Navazuje na:** `2026-09-23-engine-v2-design.md`, `2026-09-23-realism-pass-design.md`
 
 ## Proč

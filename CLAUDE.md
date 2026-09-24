@@ -5,14 +5,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 Paprika is a pure-Python music library: write a song as a Python module, render
-it to WAV with hand-written synthesis. Dependencies are `numpy` and `scipy`
-(scipy only for `lfilter` IIR filters and FFT convolution; WAV via stdlib
-`wave`; oscillators, envelopes, effects, limiter all written by hand).
+it to WAV with hand-written synthesis — or, for real acoustic instruments, with
+the SFZ sampler. Dependencies are `numpy` and `scipy` (scipy for `lfilter` IIR
+filters, FFT convolution and `scipy.io.wavfile` sample reading; output WAV via
+stdlib `wave`; oscillators, envelopes, effects, limiter all written by hand).
 
 Current goal (engine v2, 2026-09): varied instrumental Arcane-style soundtrack
-for a Unity game. Specs live in `docs/superpowers/specs/`; engine v2 is done,
-next sub-projects are style packs + `/paprika` skill, game export (loops,
-stems, stingers), SFZ sampler.
+for a Unity game. Specs live in `docs/superpowers/specs/`; engine v2 and the
+SFZ sampler (`2026-09-24-sampler-design.md`, pulled forward because synthesis
+still sounded "chiptune") are done; next sub-projects are style packs +
+`/paprika` skill and game export (loops, stems, stingers).
 
 The library is *not* a music generator — melody, harmony and structure are
 written by the author (usually the AI). Paprika supplies theory, synthesis, FX,
@@ -38,9 +40,12 @@ python -m paprika show   songs/x.py --bars 12:16 --res 16  # ASCII roll, no rend
 python -m paprika play   output/x.wav
 python -m paprika presets
 python -m paprika compare ref.mp3 output/x.wav          # mix metrics vs a reference
+python -m paprika samples                               # sampler: path, groups, instruments
+python -m paprika samples install all                   # ~2.3 GB, resumable
 
-python -m pytest tests/                                  # ~340 tests, ~25 s
+python -m pytest tests/                                  # ~400 tests, ~25 s
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py     # renders every song, ~2 min
+PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # installed samples: level + tuning
 python -m pytest tests/test_render.py::TestLimiter::test_tames_overs
 python -m unittest discover tests                        # pytest not required
 ```
@@ -71,6 +76,12 @@ Layer boundaries are deliberately sharp — keep them:
 - `oscillators.py`, `filters.py`, `modulation.py` — building blocks of a patch (`modulation.py` also holds `Ensemble`).
 - `patch.py` — `ADSR` + `Patch.voice()`: one phrase → one mono `(n,)` or stereo `(n, 2)` buffer; re-exports the building blocks.
 - `presets.py`, `kits.py`, `sfx.py` — instruments, drum kits, cinematic SFX; all synthesized, no samples.
+- `sfz.py` — SFZ text -> `Region`s. Text only, no audio.
+- `sampler.py` — `Sampler`: region selection (key/vel/round robin), pitch shift +
+  resample in one Hermite read, loops, legato, release. Knows no beats or pedal.
+- `library.py` — catalog of sampled instruments (`name.articulation`), sample root.
+- `install.py` — the only module touching the network: Salamander + VSCO 2 CE
+  download, safe tar extraction, SFZ generation from VSCO file names.
 - `fx.py`, `fx_space.py`, `fx_dyn.py`, `fx_lofi.py` — track/bus/master effects.
 - `automation.py` — automation curves and target resolution.
 - `metrics.py` — mix metrics of a finished buffer/file (7 bands, width, crest, LRA); used by the report and `compare`. Reads only audio.
@@ -123,6 +134,33 @@ from mono sources, too much sub (< 60 Hz), thin mids, linear envelopes and
 fast arpeggios. Check new songs with `compare` — the cinematic target is
 sub ≤ 12 %, mids ≥ 20 %, width ≥ 10 % (`metrics.TARGETS`).
 
+### Sampler (real instruments)
+
+A track's `patch` is either a `Patch` or a `Sampler`; `render_track` branches on
+`isinstance(track.patch, Sampler)` (after the Drum/Sfx branches) into
+`_render_sampled`. Scheduling lives in `render.py`: `_pedaled` applies
+`Track.pedals` (also used for poly synth tracks in `_phrases`), and
+`_sampled_events` marks legato pairs (mono track or `>` note, and
+`Sampler.legato`). Sampled voices are cached by `(sampler.key(), region id,
+pitch, dur, legato_in, legato_out, sr)`; velocity is applied afterwards as
+`Sampler.gain` (SFZ `amp_veltrack` law) so humanized velocities still hit the
+cache. `_tail_seconds` uses `Sampler.tail`.
+
+Samples live **outside the repo** (`PAPRIKA_SAMPLES`, else
+`%LOCALAPPDATA%\paprika\samples`, else `~/.paprika/samples`). WAVs are read
+lazily via `scipy.io.wavfile.read(mmap=True)` and cached per process in
+`sampler._WAVS`; on Windows the mmaps keep files open, so tests call
+`sampler.clear_cache()` before deleting temp dirs. Tests build tiny synthetic
+libraries with `tests/sample_fixture.py` — no network.
+
+VSCO 2 CE names most folders with C3 = middle C (pitch from name + 12); the
+exceptions are listed in `install.VSCO_OCTAVE_ZERO` (measured by pitch
+detection). Generated SFZ are normalized: median max-RMS of the top layer to
+−18 dBFS with a 0.9 peak ceiling. Sampled instrument names must not collide
+with preset names (`test_library.test_catalog`). A missing library raises
+`SamplesMissing` with the install command — never fall back to synthesis
+silently (the AI cannot hear the difference).
+
 ### DrumTrack is a special case
 
 `DrumTrack` stores `DrumHit`s in `.hits`, not notes — its `all_notes()` returns
@@ -142,6 +180,13 @@ merge into one voice; same pitch without `>` retriggers (808 patterns).
   `_default_fx`. `preset()` returns a fresh instance each call, so per-track
   tweaks don't leak. `tests/test_presets.py` checks level (< 1.0 at vel 127,
   55–880 Hz) and that every new preset differs spectrally from the others.
+- **New sampled instrument** — an `Instrument` in `library._LIST` mapping each
+  articulation to a VSCO repo folder (short arts `pizz/spic/stac` are one-shot,
+  string/wind/brass sustains get loops). Verify the folder's octave naming by
+  pitch detection (exceptions go in `install.VSCO_OCTAVE_ZERO`), rerun
+  `python -m paprika samples install <group>`, then
+  `PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py`. Any SFZ file
+  also works directly: `s.track(Sampler(path, legato=True))`.
 - **New drum kit** — a dict of `name -> f(sr)` in `kits.py`, registered in
   `KITS`; missing instruments fall back to `classic`.
 - **New oscillator / filter** — subclass `Osc` (`render(freq, n, sr, phase)`,

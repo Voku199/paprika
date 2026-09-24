@@ -6,20 +6,50 @@ soubory se správnou velikostí se přeskočí, rozstahované leží jako `.part
 
 from __future__ import annotations
 
+import datetime
+import json
 import math
 import os
+import posixpath
 import re
+import tarfile
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
-from .library import Instrument
+from .library import GROUPS, INSTRUMENTS, SALAMANDER_SFZ, Instrument, samples_root
 from .sampler import load_wav, to_float
 from .sfz import note_number
 
 __all__ = ["InstallError", "parse_sample_name", "plan_regions", "write_sfz",
-           "VSCO_SHA", "VSCO_OCTAVE_ZERO", "TARGET_RMS_DB"]
+           "download", "extract", "vsco_files", "install", "MANIFEST",
+           "SALAMANDER_URL", "SALAMANDER_SIZE", "VSCO_SHA", "VSCO_OCTAVE_ZERO",
+           "TARGET_RMS_DB"]
 
 VSCO_SHA = "440300901dfe9275fd84e0b7763af1f8443ae62e"
+VSCO_TREE = ("https://api.github.com/repos/sgossner/VSCO-2-CE/git/trees/"
+             f"{VSCO_SHA}?recursive=1")
+VSCO_RAW = f"https://raw.githubusercontent.com/sgossner/VSCO-2-CE/{VSCO_SHA}/"
+SALAMANDER_URL = ("https://archive.org/download/SalamanderGrandPianoV3/"
+                  "SalamanderGrandPianoV3_44.1khz16bit.tar.bz2")
+SALAMANDER_SIZE = 488713261
+MANIFEST = "paprika_samples.json"
+CREDITS = """Vzorky nainstalované Paprikou
+==============================
+
+Salamander Grand Piano V3 (nástroj grand_piano)
+  Autor: Alexander Holm. Licence: CC-BY 3.0
+  https://creativecommons.org/licenses/by/3.0/
+  POVINNÉ při použití (i ve hře): uveď v titulcích
+  "Salamander Grand Piano V3 by Alexander Holm, licensed under CC-BY 3.0".
+
+VSCO 2 Community Edition (smyčce, dechy, žestě, mallets, upright_piano)
+  Versilian Studios LLC a přispěvatelé (Upright Piano: Simon Dalzell,
+  Ivy Audio). Licence: CC0 1.0 — kredit není povinný, ale je vítaný.
+  https://github.com/sgossner/VSCO-2-CE
+"""
 TARGET_RMS_DB = -18.0     # max RMS nejhlasitější vrstvy prostředního kořene
 # VSCO pojmenovává většinu složek s C3 = střední C (výška z jména + 12);
 # tyhle používají C4 = 60. Změřeno detekcí výšky všech složek 2026-09-24.
@@ -144,3 +174,156 @@ def write_sfz(inst: Instrument, art: str, root: str) -> str:
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return path
+
+
+# --------------------------------------------------------------------------
+# síť
+# --------------------------------------------------------------------------
+
+def _urlopen(url: str, timeout: float = 60.0):
+    req = urllib.request.Request(url, headers={"User-Agent": "paprika-sampler"})
+    return urllib.request.urlopen(req, timeout=timeout)  # noqa: S310 - pevné https URL
+
+
+def download(url: str, dst: str, size: int | None = None) -> bool:
+    """Stáhne `url` do `dst` přes `.part`. False = soubor už je hotový."""
+    if os.path.isfile(dst) and (size is None or os.path.getsize(dst) == size):
+        return False
+    os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+    part = dst + ".part"
+    try:
+        with _urlopen(url) as resp, open(part, "wb") as f:
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+    except OSError as e:              # URLError je podtřída OSError
+        if os.path.exists(part):
+            os.remove(part)
+        raise InstallError(f"stažení selhalo: {url} ({e}) — spusť instalaci "
+                           f"znovu, hotové soubory se přeskočí") from e
+    got = os.path.getsize(part)
+    if size is not None and got != size:
+        os.remove(part)
+        raise InstallError(f"stažený soubor má {got} B místo {size} B: {url} — "
+                           f"spusť instalaci znovu")
+    os.replace(part, dst)
+    return True
+
+
+def extract(archive: str, dest: str) -> None:
+    """Rozbalí tar(.bz2) do `dest`; člen mimo `dest` nebo odkaz = chyba."""
+    dest_abs = os.path.abspath(dest)
+    os.makedirs(dest_abs, exist_ok=True)
+    with tarfile.open(archive, "r:*") as tar:
+        for m in tar:
+            target = os.path.abspath(os.path.join(dest_abs, m.name))
+            if (os.path.commonpath([dest_abs, target]) != dest_abs
+                    or not (m.isfile() or m.isdir())):
+                raise InstallError(f"archiv {archive} obsahuje nebezpečnou "
+                                   f"položku: {m.name}")
+            tar.extract(m, dest_abs, filter="data")
+
+
+def _install_salamander(root: str, log) -> None:
+    dest = os.path.join(root, "salamander")
+    marker = os.path.join(dest, ".complete")
+    if os.path.isfile(marker):
+        log("piano: Salamander Grand Piano už je nainstalovaný")
+        return
+    archive = os.path.join(root, "_downloads", os.path.basename(SALAMANDER_URL))
+    log("piano: stahuji Salamander Grand Piano (489 MB) ...")
+    download(SALAMANDER_URL, archive, SALAMANDER_SIZE)
+    log("piano: rozbaluji (~1.2 GB) ...")
+    extract(archive, dest)
+    if not os.path.isfile(os.path.join(root, SALAMANDER_SFZ)):
+        raise InstallError(f"v archivu chybí {SALAMANDER_SFZ}")
+    with open(marker, "w", encoding="utf-8") as f:
+        f.write(datetime.date.today().isoformat() + "\n")
+
+
+def vsco_files(folders) -> list[tuple[str, int]]:
+    """WAV soubory VSCO repa přímo ve složkách `folders` (cesta, velikost)."""
+    try:
+        with _urlopen(VSCO_TREE) as resp:
+            tree = json.load(resp)["tree"]
+    except (OSError, ValueError, KeyError) as e:
+        raise InstallError(f"seznam souborů VSCO 2 CE se nepodařilo získat ({e}) "
+                           f"— zkus to znovu za chvíli (limit GitHub API)") from e
+    want = set(folders)
+    return [(x["path"], int(x["size"])) for x in tree
+            if x.get("type") == "blob" and x["path"].lower().endswith(".wav")
+            and posixpath.dirname(x["path"]) in want]
+
+
+def _download_vsco(files, root: str, log) -> None:
+    base = os.path.join(root, "vsco2")
+    total = sum(s for _, s in files)
+    step = max(1, len(files) // 10)
+
+    def one(item):
+        path, size = item
+        download(VSCO_RAW + urllib.parse.quote(path),
+                 os.path.join(base, *path.split("/")), size)
+        return size
+
+    done = 0
+    with ThreadPoolExecutor(8) as ex:
+        for i, size in enumerate(ex.map(one, files), 1):
+            done += size
+            if i % step == 0 or i == len(files):
+                log(f"  {i}/{len(files)} souborů, "
+                    f"{done / 1e6:.0f}/{total / 1e6:.0f} MB")
+
+
+def _write_manifest(root: str, groups) -> None:
+    path = os.path.join(root, MANIFEST)
+    data: dict = {}
+    if os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except ValueError:
+            data = {}
+    today = datetime.date.today().isoformat()
+    data.setdefault("groups", {})
+    for g in groups:
+        data["groups"][g] = {"installed": today}
+    data["vsco2_commit"] = VSCO_SHA
+    data["salamander"] = SALAMANDER_URL
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def install(group: str, root: str | None = None, log=print) -> list[str]:
+    """Nainstaluje skupinu (`piano`, `strings`, ..., `all`). Vrací nástroje."""
+    groups = list(GROUPS) if group == "all" else [group]
+    for g in groups:
+        if g not in GROUPS:
+            raise InstallError(f"neznámá skupina {g!r}; k dispozici: "
+                               f"{', '.join(GROUPS)}, all")
+    root = os.path.abspath(root or samples_root())
+    os.makedirs(root, exist_ok=True)
+    done: list[str] = []
+    for g in groups:
+        insts = [i for i in INSTRUMENTS.values() if i.group == g]
+        if any(i.library == "salamander" for i in insts):
+            _install_salamander(root, log)
+        vsco = [i for i in insts if i.library == "vsco2"]
+        if vsco:
+            folders = sorted({f for i in vsco for f in i.arts.values()})
+            log(f"{g}: zjišťuji soubory VSCO 2 CE ...")
+            files = vsco_files(folders)
+            log(f"{g}: {len(files)} souborů, "
+                f"{sum(s for _, s in files) / 1e6:.0f} MB")
+            _download_vsco(files, root, log)
+            for inst in vsco:
+                for art in inst.arts:
+                    write_sfz(inst, art, root)
+            log(f"{g}: SFZ vygenerováno")
+        done += [i.name for i in insts]
+    _write_manifest(root, groups)
+    with open(os.path.join(root, "CREDITS.txt"), "w", encoding="utf-8") as f:
+        f.write(CREDITS)
+    return done

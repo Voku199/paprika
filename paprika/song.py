@@ -15,8 +15,11 @@ from . import drums as _drums
 from . import note as _note
 from . import theory
 from .note import Note
+from .library import (instrument as _sampled_instrument, instrument_defaults,
+                      instrument_fx, is_sampled)
 from .patch import Patch
 from .presets import preset
+from .sampler import Sampler
 
 __all__ = ["Song", "Track", "DrumTrack", "SfxTrack", "Bus", "Clip",
            "suppress_render"]
@@ -24,6 +27,8 @@ __all__ = ["Song", "Track", "DrumTrack", "SfxTrack", "Bus", "Clip",
 # Když skladbu importuje CLI, `Song.render()` uvnitř souboru se má chovat jako
 # no-op — jinak by se renderovalo dvakrát. CLI si tenhle přepínač zapíná samo.
 _SUPPRESS_RENDER = False
+
+PEDAL_LIFT = 1.0 / 16.0   # beaty: zvednutí nohy při přešlápnutí pedálu
 
 
 class suppress_render:
@@ -56,7 +61,7 @@ class Clip:
 class Track:
     """Jedna stopa: nástroj, klipy, efektový řetěz, hlasitost a pan."""
 
-    def __init__(self, song: "Song", patch: Patch, name: str, vol: float = 0.8,
+    def __init__(self, song: "Song", patch: Patch | Sampler, name: str, vol: float = 0.8,
                  pan: float = 0.0, chromatic: bool = False, mono: bool = False,
                  glide: float = 0.0):
         self.song = song
@@ -73,6 +78,9 @@ class Track:
         self.glide = float(glide)
         self.automations: list = []
         self.bus = None
+        # sustain pedál: (down_beat, up_beat); noty končící při sešlápnutí
+        # zní do uvolnění (render._pedaled)
+        self.pedals: list = []
 
     # -- pomocné ----------------------------------------------------------
     @property
@@ -170,6 +178,32 @@ class Track:
         """
         from .automation import Automation
         self.automations.append(Automation(target, points, curve))
+        return self
+
+    def pedal(self, bars, every: float | None = None):
+        """Sustain pedál (piano): nota, která skončí při sešlápnutí, zní do
+        uvolnění. `bars=(od, do)` v taktech; `every` = přešlápnutí po tolika
+        taktech (1 = každý takt, jak to dělá pianista při změně harmonie)::
+
+            piano.pedal(bars=(0, 8), every=1)
+
+        Pedál se sešlápne `PEDAL_LIFT` beatu po začátku úseku, takže nota
+        končící přesně na hranici se nezachytí (noha je zrovna nahoře).
+        """
+        lo, hi = float(bars[0]), float(bars[1])
+        if hi <= lo:
+            raise ValueError(f"pedal: bars=(od, do) musí mít do > od, "
+                             f"dostal jsem {bars!r}")
+        step = float(every) if every else hi - lo
+        if step <= 0:
+            raise ValueError("pedal: every musí být kladné")
+        b = lo
+        while b < hi - 1e-9:
+            e = min(hi, b + step)
+            self.pedals.append((self._bar_to_beat(b) + PEDAL_LIFT,
+                                self._bar_to_beat(e)))
+            b = e
+        self.pedals.sort()
         return self
 
     def to(self, bus):
@@ -506,23 +540,30 @@ class Song:
               chromatic: bool = False, name: str | None = None,
               mono: bool | None = None, glide: float | None = None,
               fx=None) -> Track:
-        """Přidá stopu. `instrument` je jméno presetu nebo `Patch`.
+        """Přidá stopu. `instrument` je preset, samplovaný nástroj
+        (`"grand_piano"`, `"violins.pizz"`), `Patch` nebo `Sampler`.
 
         `mono=True` zapne mono legato, `glide` je délka sklouznutí v beatech
-        (když je nezadáš, vezmou se z `PRESET_DEFAULTS`, např. 808 je mono).
-        `fx` je seznam efektů, nebo `"default"` = doporučený řetěz presetu.
+        (když je nezadáš, vezmou se z `PRESET_DEFAULTS`, např. 808 je mono;
+        sólové nahrané nástroje jsou mono = legato).
+        `fx` je seznam efektů, nebo `"default"` = doporučený řetěz nástroje.
         """
         from .presets import PRESET_DEFAULTS, preset_fx
         defaults = {}
-        if isinstance(instrument, str):
+        if isinstance(instrument, str) and is_sampled(instrument):
+            patch = _sampled_instrument(instrument)
+            label = name or instrument.strip().lower().replace(".", "_")
+            defaults = instrument_defaults(instrument)
+        elif isinstance(instrument, str):
             patch = preset(instrument)
             label = name or instrument
             defaults = PRESET_DEFAULTS.get(str(instrument).lower(), {})
-        elif isinstance(instrument, Patch):
+        elif isinstance(instrument, (Patch, Sampler)):
             patch = instrument
             label = name or instrument.name
         else:
-            raise TypeError("instrument musí být jméno presetu nebo Patch")
+            raise TypeError("instrument musí být jméno presetu nebo samplovaného "
+                            "nástroje, Patch nebo Sampler")
         if mono is None:
             mono = defaults.get("mono", False)
         if glide is None:
@@ -531,9 +572,10 @@ class Song:
                   mono=bool(mono), glide=float(glide))
         if isinstance(fx, str):
             if fx != "default" or not isinstance(instrument, str):
-                raise ValueError("fx='default' funguje jen s jménem presetu; "
+                raise ValueError("fx='default' funguje jen se jménem nástroje; "
                                  "jinak předej seznam efektů")
-            t.fx(*preset_fx(instrument))
+            t.fx(*(instrument_fx(instrument) if is_sampled(instrument)
+                   else preset_fx(instrument)))
         elif fx:
             t.fx(*fx)
         self.tracks.append(t)

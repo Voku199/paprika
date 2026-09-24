@@ -14,7 +14,9 @@ from . import drums as _drums
 from .automation import resolve as _resolve_automation
 from .fx import FxContext
 from .fx import apply_fx as _apply_fx
+from .note import Note
 from .patch import midi_to_freq
+from .sampler import Sampler
 from . import sfx as _sfx
 from .song import Bus, DrumTrack, SfxTrack, Song, Track
 
@@ -99,7 +101,7 @@ def _phrases(track: Track) -> list[tuple]:
 
     out = []
     prev = None
-    for n in notes:
+    for n in _pedaled(notes, getattr(track, "pedals", [])):
         if n.glide and prev is not None and prev.pitch != n.pitch:
             path = ((0.0, prev.pitch), (0.0, n.pitch))
             glide = track.glide or DEFAULT_SLIDE
@@ -109,6 +111,55 @@ def _phrases(track: Track) -> list[tuple]:
         out.append((n.start_beat, n.dur_beats, n.velocity, path, glide))
         prev = n
     return out
+
+
+def _pedaled(notes: list, pedals: list) -> list:
+    """Noty prodloužené sustain pedálem (nové instance, vstup se nemění).
+
+    Nota, která skončí při sešlápnutém pedálu, zní do jeho uvolnění. Znovu
+    udeřená stejná výška utne předchozí hlas na novém úderu.
+    """
+    if not pedals:
+        return notes
+    out = []
+    for n in notes:
+        end = n.end_beat
+        for down, up in pedals:
+            if down <= end < up:
+                end = up
+                break
+        out.append(Note(n.pitch, n.start_beat, end - n.start_beat, n.velocity,
+                        n.glide))
+    last: dict = {}
+    for n in out:
+        prev = last.get(n.pitch)
+        if prev is not None and prev.end_beat > n.start_beat:
+            prev.dur_beats = max(1e-3, n.start_beat - prev.start_beat)
+        last[n.pitch] = n
+    return out
+
+
+def _sampled_events(track: Track) -> list[list]:
+    """Noty samplované stopy -> `[start, dur, vel, pitch, legato_in, legato_out]`.
+
+    Legato: artikulace ho umí (`Sampler.legato`), stopa je mono nebo nota
+    má `>`, a nota začíná nejpozději `LEGATO_GAP` po konci předchozí.
+    Předchozí nota pak končí na začátku nové a prolnou se.
+    """
+    notes = _pedaled(track.all_notes(), getattr(track, "pedals", []))
+    events = [[n.start_beat, n.dur_beats, n.velocity, n.pitch, False, False]
+              for n in notes]
+    if not getattr(track.patch, "legato", False):
+        return events
+    prev = None
+    for ev, n in zip(events, notes):
+        if (prev is not None and (track.mono or n.glide)
+                and prev[0] < ev[0] <= prev[0] + prev[1] + LEGATO_GAP):
+            prev[1] = ev[0] - prev[0]
+            prev[5] = True
+            ev[4] = True
+        prev = ev
+    return events
 
 
 def _fit(buf: np.ndarray, n: int) -> np.ndarray:
@@ -130,6 +181,31 @@ def _add(buf: np.ndarray, i: int, sample: np.ndarray, amp: float) -> None:
         return
     part = sample[:end - i] * amp
     buf[i:end] += part[:, None] if part.ndim == 1 else part
+
+
+def _render_sampled(track: Track, buf: np.ndarray, ctx: FxContext, cache: dict,
+                    beat_offset: float) -> None:
+    """Noty samplované stopy -> hlasy sampleru přičtené do `buf`."""
+    sampler = track.patch
+    sr, n = ctx.sr, buf.shape[0]
+    spb = 60.0 / ctx.bpm
+    skey = sampler.key()
+    for idx, (start_b, dur_b, vel, pitch, leg_in, leg_out) in enumerate(
+            _sampled_events(track)):
+        start = start_b - beat_offset
+        if start < 0:
+            continue
+        i = int(round(start * spb * sr))
+        if i >= n:
+            continue
+        dur = round(max(0.01, dur_b * spb), 5)
+        for region in sampler.select(pitch, vel, idx):
+            key = (skey, sampler.region_id(region), pitch, dur, leg_in, leg_out, sr)
+            voice = cache.get(key)
+            if voice is None:
+                voice = sampler.voice(region, pitch, dur, sr, leg_in, leg_out)
+                cache[key] = voice
+            _add(buf, i, voice, sampler.gain(region, vel))
 
 
 def render_track(track: Track, n: int, ctx: FxContext, cache: dict | None = None,
@@ -161,6 +237,8 @@ def render_track(track: Track, n: int, ctx: FxContext, cache: dict | None = None
             sample = _drums.render_hit(hit.name, sr, getattr(track, "kit", "classic"))
             amp = (max(1, min(127, hit.velocity)) / 127.0) ** 1.4
             _add(buf, i, sample, amp)
+    elif isinstance(track.patch, Sampler):
+        _render_sampled(track, buf, ctx, cache, beat_offset)
     else:
         patch = track.patch
         pkey = patch.key()
@@ -336,7 +414,11 @@ def _tail_seconds(song: Song, ctx: FxContext) -> float:
     tail = 0.5
     for t in song.tracks:
         fx_tail = sum(f.tail(ctx) for f in t.fx_chain)
-        release = getattr(getattr(t.patch, "adsr", None), "r", 0.3) or 0.0
+        patch = getattr(t, "patch", None)
+        if isinstance(patch, Sampler):
+            release = patch.tail
+        else:
+            release = getattr(getattr(patch, "adsr", None), "r", 0.3) or 0.0
         if isinstance(t, SfxTrack) and t.hits:
             release = max(release, SFX_TAIL)
         tail = max(tail, fx_tail + release + 0.3)

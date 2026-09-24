@@ -87,9 +87,9 @@ Sampler(sfz_path, name=None, legato=False, undamped_from=None, gain_db=0.0)
     ignoruje;
   - jinak gate = `dur`, pak release `ampeg_release` (exponenciálně);
     u piana noty ≥ `undamped_from` (bez dusítek) doznívají s release 2 s;
-  - vzorek kratší než gate u výdrží: smyčka s crossfadem — `loop_start/end`
-    z SFZ, jinak automaticky 45 %–90 % délky, crossfade min(25 % smyčky,
-    0.5 s), rovný výkon;
+  - region se smyčkou (`loop_continuous`/`loop_sustain` + `loop_start/end`):
+    nota delší než vzorek pokračuje smyčkou s crossfadem min(25 % smyčky,
+    0.5 s), rovný výkon; bez smyčky vzorek prostě dozní (piano);
   - `legato_in`: začne `LEGATO_OFFSET` = 0.08 s ve vzorku (přeskočí nasazení
     smyčce/jazyku) s fade-in `LEGATO_XFADE` = 0.08 s; `legato_out`:
     release = `LEGATO_XFADE`;
@@ -163,7 +163,13 @@ Sampler(sfz_path, name=None, legato=False, undamped_from=None, gain_db=0.0)
     kořeny, krajní rozšířené o 2 půltóny;
   - vrstvy rozdělí 1–127 rovnoměrně; `amp_veltrack` 100 pro jednu vrstvu,
     40 pro víc (nahrávky už nesou dynamiku);
+  - oktáva: VSCO pojmenovává většinu složek s C3 = střední C, takže
+    výška z jména + 12; výjimky (C4 = 60) jsou `Keys/Upright Nr1`,
+    `Strings/Harp`, `Strings/Solo Violin/Arco Vib`, `Strings/Solo Violin/Pizz`
+    (změřeno detekcí výšky všech složek 2026-09-24);
   - `loop_mode=one_shot` pro pizz, spic, stac, harfu, mallets;
+  - výdrže (smyčce, dechy, žestě kromě one_shot): `loop_mode=loop_continuous`,
+    `loop_start` = 45 %, `loop_end` = 90 % délky vzorku;
     `ampeg_release` 0.3 s (smyčce, dechy), 0.25 s žestě, 0.4 s pianino;
   - normalizace: `<global> volume` tak, aby RMS nejhlasitější vrstvy
     prostředního kořene bylo −20 dBFS.
@@ -178,7 +184,7 @@ Sampler(sfz_path, name=None, legato=False, undamped_from=None, gain_db=0.0)
   legato_out)`:
   - **pedál** (`Track.pedal`): nota, která končí při sešlápnutém pedálu,
     zní do jeho uvolnění; znovu udeřená stejná výška utne předchozí hlas
-    na novém úderu (+ 0.1 s dozvuk);
+    na novém úderu (dál doznívá svým release);
   - **legato**: mono stopa + artikulace v `legato_arts` + nota začíná
     nejpozději `LEGATO_GAP` po konci předchozí → předchozí `legato_out`
     (končí v `start + LEGATO_XFADE`), nová `legato_in`; `>` v notaci

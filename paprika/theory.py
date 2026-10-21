@@ -113,7 +113,9 @@ def pitch(name: str) -> int:
     if not tail or not (tail.lstrip("-").isdigit()):
         raise TheoryError(f"chybí oktáva: {name!r}")
     octave = int(tail)
-    return (octave + 1) * 12 + NOTE_TO_PC[head]
+    # oktáva patří písmenu: B#3 je C4 (60), Cb4 je H3 (59) - ne pc modulo 12
+    letter = NOTE_TO_PC[head[0]]
+    return (octave + 1) * 12 + letter + {"#": 1, "b": -1}.get(head[1:], 0)
 
 
 def note_name(p: int) -> str:

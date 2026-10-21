@@ -15,6 +15,7 @@ import re
 import tarfile
 import urllib.parse
 import urllib.request
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -35,6 +36,9 @@ VSCO_RAW = f"https://raw.githubusercontent.com/sgossner/VSCO-2-CE/{VSCO_SHA}/"
 SALAMANDER_URL = ("https://archive.org/download/SalamanderGrandPianoV3/"
                   "SalamanderGrandPianoV3_44.1khz16bit.tar.bz2")
 SALAMANDER_SIZE = 488713261
+VOCALSET_URL = "https://zenodo.org/records/1442513/files/VocalSet11.zip?download=1"
+VOCALSET_ZIP = "VocalSet11.zip"
+VOCALSET_SIZE = 2077087366
 MANIFEST = "paprika_samples.json"
 CREDITS = """Vzorky nainstalované Paprikou
 ==============================
@@ -49,6 +53,15 @@ VSCO 2 Community Edition (smyčce, dechy, žestě, mallets, upright_piano)
   Versilian Studios LLC a přispěvatelé (Upright Piano: Simon Dalzell,
   Ivy Audio). Licence: CC0 1.0 — kredit není povinný, ale je vítaný.
   https://github.com/sgossner/VSCO-2-CE
+
+VocalSet 1.2 (male_choir, basso, tenor, female_choir, soprano, alto)
+  Julia Wilkins, Prem Seetharaman, Alison Wahl, Bryan Pardo (Northwestern
+  University). Licence: CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/
+  https://doi.org/10.5281/zenodo.1442513
+  POVINNÉ při použití (i ve hře): uveď v titulcích
+  "Vocals from VocalSet by J. Wilkins, P. Seetharaman, A. Wahl and B. Pardo,
+  licensed under CC BY 4.0". Paprika nahrávky rozřezala na tóny a hluboké
+  tóny dopočítala posunem výšky (PSOLA).
 """
 TARGET_RMS_DB = -18.0     # medián max RMS nejhlasitější vrstvy přes kořeny
 PEAK_CEILING = 0.9        # žádný vzorek nejhlasitější vrstvy nad tuhle špičku
@@ -60,6 +73,16 @@ LOOP_START, LOOP_END = 0.45, 0.90
 _DYN = {"ppp": 1, "pp": 2, "p": 3, "mp": 4, "mf": 5, "f": 6, "ff": 7, "fff": 8,
         "soft": 3, "medium": 5, "loud": 7}
 _NOTE = re.compile(r"^[A-G][#b]?-?\d$")
+# Soubory bez noty ve jméně (tympány VSCO: kotel 1-5): výška hlavního tónu
+# v MIDI s desetinami, změřená FFT s interpolací špičky (2026-10-10).
+# Kořen je zaokrouhlený, zbytek dorovná `tune` v SFZ. Údery a víření jsou
+# nahrané v jiném ladění, proto zvlášť.
+VSCO_NAMED_PITCH = {
+    "Timpani1_Hit": 41.46, "Timpani2_Hit": 46.80, "Timpani3_Hit": 49.49,
+    "Timpani4_Hit": 52.43, "Timpani5_Hit": 54.59,
+    "Timpani1_Roll": 41.83, "Timpani2_Roll": 47.55, "Timpani3_Roll": 49.43,
+    "Timpani4_Roll": 52.09, "Timpani5_Roll": 55.24,
+}
 
 
 class InstallError(RuntimeError):
@@ -75,7 +98,12 @@ def parse_sample_name(filename: str, octave_shift: int = 0):
     """
     stem = os.path.splitext(os.path.basename(filename))[0]
     pitch, layer, rr = None, 0, 1
-    for tok in stem.split("_"):
+    toks = stem.split("_")
+    named = _named_pitch(stem)
+    if named is not None:
+        pitch = round(named)
+        toks = toks[2:]
+    for tok in toks:
         low = tok.lower()
         if pitch is None:
             if _NOTE.match(tok):
@@ -90,6 +118,12 @@ def parse_sample_name(filename: str, octave_shift: int = 0):
         elif tok.isdigit():
             rr = int(tok)
     return None if pitch is None else (pitch, layer, rr)
+
+
+def _named_pitch(stem: str) -> float | None:
+    """Změřená výška souboru bez noty ve jméně (`Timpani3_Hit_...`)."""
+    toks = stem.split("_")
+    return VSCO_NAMED_PITCH.get("_".join(toks[:2])) if len(toks) >= 2 else None
 
 
 def plan_regions(entries) -> list[dict]:
@@ -167,6 +201,9 @@ def write_sfz(inst: Instrument, art: str, root: str) -> str:
                            f"{inst.name}.{art} — spusť instalaci znovu")
     regions = plan_regions(entries)
     for r in regions:
+        named = _named_pitch(os.path.splitext(r["sample"].rsplit("/", 1)[-1])[0])
+        if named is not None:
+            r["tune"] = round((r["pitch_keycenter"] - named) * 100)
         if inst.loops(art):
             n = load_wav(os.path.join(base, *r["sample"].split("/")))[1].shape[0]
             r["loop_mode"] = "loop_continuous"
@@ -256,6 +293,51 @@ def _install_salamander(root: str, log) -> None:
         f.write(datetime.date.today().isoformat() + "\n")
 
 
+def extract_vocalset(archive: str, dest: str, singers, takes) -> int:
+    """Z VocalSet zipu rozbalí jen `FULL/<zpěvák>/<take>/*.wav`. Vrací počet."""
+    dest_abs = os.path.abspath(dest)
+    want = {f"FULL/{s}/{t}/" for s in singers for t in takes}
+    count = 0
+    with zipfile.ZipFile(archive) as z:
+        for name in z.namelist():
+            if not name.lower().endswith(".wav") or name.rsplit("/", 1)[0] + "/" not in want:
+                continue
+            target = os.path.abspath(os.path.join(dest_abs, *name.split("/")))
+            if os.path.commonpath([dest_abs, target]) != dest_abs:
+                raise InstallError(f"archiv {archive} obsahuje nebezpečnou položku: {name}")
+            if not (os.path.isfile(target)
+                    and os.path.getsize(target) == z.getinfo(name).file_size):
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with z.open(name) as src, open(target, "wb") as dst:
+                    dst.write(src.read())
+            count += 1
+    return count
+
+
+def _install_vocalset(root: str, log) -> None:
+    from . import voices
+    dest = os.path.join(root, "vocalset")
+    downloads = os.path.join(root, "_downloads")
+    archive = os.path.join(downloads, VOCALSET_ZIP)
+    legacy = os.path.join(downloads, "VocalSet.zip")     # ručně stažený soubor
+    if not os.path.isfile(archive) and os.path.isfile(legacy):
+        archive = legacy
+    singers = voices.all_singers()
+    missing = [s for s in singers if not os.path.isdir(os.path.join(dest, "FULL", s))]
+    if missing or not os.path.isfile(os.path.join(dest, ".extracted")):
+        if archive != legacy and not os.path.isfile(archive):
+            log("voices: stahuji VocalSet (2.1 GB) ...")
+            download(VOCALSET_URL, archive, VOCALSET_SIZE)
+        log("voices: rozbaluji hlasy ...")
+        n = extract_vocalset(archive, dest, singers, voices.TAKES)
+        if not n:
+            raise InstallError(f"v archivu {archive} nejsou nahrávky VocalSet")
+        with open(os.path.join(dest, ".extracted"), "w", encoding="utf-8") as f:
+            f.write(datetime.date.today().isoformat() + "\n")
+    voices.build(root, log=log)
+    log("voices: SFZ vygenerováno")
+
+
 def vsco_files(folders) -> list[tuple[str, int]]:
     """WAV soubory VSCO repa přímo ve složkách `folders` (cesta, velikost)."""
     try:
@@ -305,6 +387,7 @@ def _write_manifest(root: str, groups) -> None:
         data["groups"][g] = {"installed": today}
     data["vsco2_commit"] = VSCO_SHA
     data["salamander"] = SALAMANDER_URL
+    data["vocalset"] = VOCALSET_URL
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -323,6 +406,8 @@ def install(group: str, root: str | None = None, log=print) -> list[str]:
         insts = [i for i in INSTRUMENTS.values() if i.group == g]
         if any(i.library == "salamander" for i in insts):
             _install_salamander(root, log)
+        if any(i.library == "vocalset" for i in insts):
+            _install_vocalset(root, log)
         vsco = [i for i in insts if i.library == "vsco2"]
         if vsco:
             folders = sorted({f for i in vsco for f in i.arts.values()})

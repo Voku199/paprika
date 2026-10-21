@@ -43,7 +43,7 @@ python -m paprika compare ref.mp3 output/x.wav          # mix metrics vs a refer
 python -m paprika samples                               # sampler: path, groups, instruments
 python -m paprika samples install all                   # ~2.3 GB, resumable
 
-python -m pytest tests/                                  # ~400 tests, ~25 s
+python -m pytest tests/                                  # ~430 tests, ~75 s
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py     # renders every song, ~2 min
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # installed samples: level + tuning
 python -m pytest tests/test_render.py::TestLimiter::test_tames_overs
@@ -80,8 +80,18 @@ Layer boundaries are deliberately sharp — keep them:
 - `sampler.py` — `Sampler`: region selection (key/vel/round robin), pitch shift +
   resample in one Hermite read, loops, legato, release. Knows no beats or pedal.
 - `library.py` — catalog of sampled instruments (`name.articulation`), sample root.
-- `install.py` — the only module touching the network: Salamander + VSCO 2 CE
-  download, safe tar extraction, SFZ generation from VSCO file names.
+- `install.py` — the only module touching the network: Salamander + VSCO 2 CE +
+  VocalSet download, safe tar/zip extraction, SFZ generation from VSCO file names.
+- `voices.py` — VocalSet singing exercises -> single notes -> SFZ (`male_choir`,
+  `basso`, `tenor`, `female_choir`, `soprano` = female2, `alto` = female7; the
+  women sing an octave above the men, long tones C4/C5/F5, and get two PSOLA
+  notes above their highest long tone too). YIN gives the pitch within the octave; the octave comes from
+  the harmonic series (`spectral_octave`) because YIN misses by an octave both ways
+  on sung notes, sometimes for whole files. Notes whose octave is unreadable are
+  dropped. Below the lowest sung note, TD-PSOLA adds three deeper notes (formants
+  kept); rough ones (subharmonic > -33 dB) are dropped. `catalog.json` caches the
+  notes so SFZ can be regenerated without re-cutting; singers added to `VOICES`
+  later are cut and appended to the existing catalog by `build()`.
 - `fx.py`, `fx_space.py`, `fx_dyn.py`, `fx_lofi.py` — track/bus/master effects.
 - `automation.py` — automation curves and target resolution.
 - `metrics.py` — mix metrics of a finished buffer/file (7 bands, width, crest, LRA); used by the report and `compare`. Reads only audio.
@@ -146,6 +156,14 @@ pitch, dur, legato_in, legato_out, sr)`; velocity is applied afterwards as
 `Sampler.gain` (SFZ `amp_veltrack` law) so humanized velocities still hit the
 cache. `_tail_seconds` uses `Sampler.tail`.
 
+`dyn` automation (sampled tracks only; `automation.resolve(..., sampled=True)`
+skips it, a synth track raises `KeyError`) is continuous dynamics like a
+modwheel: `_dyn_voice` multiplies note velocity by the curve per sample,
+renders every velocity layer with non-zero weight (`Sampler.layers`,
+`sampler.layer_weights`: equal-power crossfade `DYN_XFADE` wide around layer
+boundaries) and applies `Sampler.gain_curve`. Voices still come from the same
+cache; without `dyn` the old single-layer path is untouched (bit-identical).
+
 Samples live **outside the repo** (`PAPRIKA_SAMPLES`, else
 `%LOCALAPPDATA%\paprika\samples`, else `~/.paprika/samples`). WAVs are read
 lazily via `scipy.io.wavfile.read(mmap=True)` and cached per process in
@@ -155,7 +173,11 @@ libraries with `tests/sample_fixture.py` — no network.
 
 VSCO 2 CE names most folders with C3 = middle C (pitch from name + 12); the
 exceptions are listed in `install.VSCO_OCTAVE_ZERO` (measured by pitch
-detection). Generated SFZ are normalized: median max-RMS of the top layer to
+detection). Files without a note in the name (timpani `Timpani3_Hit_...`) get
+their pitch from `install.VSCO_NAMED_PITCH` (measured, fractional MIDI): the
+root is rounded and the rest goes into the SFZ `tune` opcode. Articulations in
+`library.LOOP_ARTS` (`roll`) loop like sustains even outside the
+strings/winds/brass groups. Generated SFZ are normalized: median max-RMS of the top layer to
 −18 dBFS with a 0.9 peak ceiling. Sampled instrument names must not collide
 with preset names (`test_library.test_catalog`). A missing library raises
 `SamplesMissing` with the install command — never fall back to synthesis

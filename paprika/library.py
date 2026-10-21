@@ -11,13 +11,14 @@ from dataclasses import dataclass
 
 from .sampler import Sampler
 
-__all__ = ["Instrument", "INSTRUMENTS", "GROUPS", "SHORT_ARTS", "SALAMANDER_SFZ",
+__all__ = ["Instrument", "INSTRUMENTS", "GROUPS", "SHORT_ARTS", "LOOP_ARTS", "SALAMANDER_SFZ",
            "SamplesMissing", "samples_root", "split_name", "is_sampled",
            "instrument_names", "is_installed", "instrument",
            "instrument_defaults", "instrument_fx", "status_lines"]
 
-GROUPS = ("piano", "strings", "winds", "brass", "mallets")
-SHORT_ARTS = ("pizz", "spic", "stac")
+GROUPS = ("piano", "strings", "winds", "brass", "mallets", "percussion", "voices")
+SHORT_ARTS = ("pizz", "spic", "stac", "hit")
+LOOP_ARTS = ("roll",)          # vířivé artikulace bicích drží smyčkou
 SALAMANDER_SFZ = ("salamander/SalamanderGrandPianoV3_44.1khz16bit/"
                   "SalamanderGrandPianoV3Retuned.sfz")
 GRAND_GAIN_DB = -4.6  # max RMS C4v16 (-13.4 dBFS) -> -18 dBFS, změřeno 2026-09-24
@@ -51,18 +52,23 @@ class Instrument:
 
     def loops(self, art: str) -> bool:
         """Výdrž, která smí běžet déle než nahrávka (smyčka)."""
-        return self.group in ("strings", "winds", "brass") and not self.is_one_shot(art)
+        return ((self.group in ("strings", "winds", "brass", "voices")
+                 and not self.is_one_shot(art)) or art in LOOP_ARTS)
 
     def sfz(self, art: str) -> str:
         """Cesta k SFZ relativně ke kořeni vzorků."""
         if self.library == "salamander":
             return SALAMANDER_SFZ
+        if self.library == "vocalset":
+            return f"vocalset/sfz/{self.name}.{art}.sfz"
         return f"vsco2/sfz/{self.name}.{art}.sfz"
 
 
 def _arts(base: str, **arts) -> dict:
     return {art: f"{base}/{folder}" for art, folder in arts.items()}
 
+
+_VOWELS = {"aah": "a", "oh": "o", "ooh": "u", "eh": "e"}
 
 _LIST = [
     Instrument("grand_piano", "piano", {"sus": ""}, library="salamander",
@@ -103,12 +109,23 @@ _LIST = [
                mono=True, release=0.25, fx="solo"),
     Instrument("tuba", "brass", _arts("Brass/Tuba", sus="sus", stac="stac"),
                mono=True, release=0.25, fx="solo"),
+    # zpěv z VocalSet (CC BY 4.0), artikulace = samohláska; viz voices.py
+    Instrument("male_choir", "voices", _VOWELS, library="vocalset", fx="choir"),
+    Instrument("basso", "voices", _VOWELS, library="vocalset", mono=True, fx="voice"),
+    Instrument("tenor", "voices", _VOWELS, library="vocalset", mono=True, fx="voice"),
+    Instrument("female_choir", "voices", _VOWELS, library="vocalset", fx="choir"),
+    Instrument("soprano", "voices", _VOWELS, library="vocalset", mono=True, fx="voice"),
+    Instrument("alto", "voices", _VOWELS, library="vocalset", mono=True, fx="voice"),
     Instrument("marimba", "mallets", {"sus": "Percussion/Marimba"},
                one_shot=True, fx="mallets"),
     Instrument("glockenspiel", "mallets", {"sus": "Percussion/Glock"},
                one_shot=True, fx="mallets"),
     Instrument("xylophone", "mallets", {"sus": "Percussion/Xylo"},
                one_shot=True, fx="mallets"),
+    # pět kotlů bez noty ve jméně souboru; výšky viz install.VSCO_NAMED_PITCH
+    Instrument("timpani", "percussion", {"hit": "Percussion/Timpani",
+                                         "roll": "Percussion/Timpani/Rolls"},
+               release=1.2, fx="timpani"),
 ]
 INSTRUMENTS = {i.name: i for i in _LIST}
 
@@ -185,6 +202,9 @@ def instrument_fx(name: str) -> list:
         "section": lambda: [Hall("hall", mix=0.3)],
         "solo": lambda: [Hall("hall", mix=0.25)],
         "mallets": lambda: [Hall("hall", mix=0.2)],
+        "timpani": lambda: [Hall("hall", mix=0.32)],
+        "choir": lambda: [Hall("cathedral", mix=0.38)],
+        "voice": lambda: [Hall("hall", mix=0.3)],
     }
     return table[inst.fx]()
 
@@ -198,6 +218,6 @@ def status_lines(root: str | None = None) -> list[str]:
         ok = all(is_installed(i.name, base) for i in insts)
         names = ", ".join(i.name if len(i.arts) == 1
                           else f"{i.name} ({' '.join(i.arts)})" for i in insts)
-        lines.append(f"{g:<8} {'[ok]   ' if ok else '[chybí]'} {names}")
+        lines.append(f"{g:<10} {'[ok]   ' if ok else '[chybí]'} {names}")
     lines.append("instalace: python -m paprika samples install <skupina|all>")
     return lines

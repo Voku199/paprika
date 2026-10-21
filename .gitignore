@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Hotové skladby a vyrenderované WAV (stovky MB) - nepatří na GitHub
+output/
+songs/output/
+*.wav
+*.mp3
+*.flac
+*.ogg
+songs_mp3/
+
+# Vzorky nástrojů (několik GB) - instalují se přes `python -m paprika samples install`
+samples/
+
+# Pracovní adresář AI workflow
+.superpowers/
+
+# Skladby: na GitHubu jen ukázky (v2_showcase, divadlo, romantic),
+# zbytek (sos_*, cast2, sos2, ...) zůstává lokálně.
+songs/*
+!songs/v2_showcase.py
+!songs/divadlo.py
+!songs/romantic.py

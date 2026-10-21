@@ -133,7 +133,7 @@ závislost navíc). Vzorky se stáhnou jednou, mimo repo:
 
 ```bash
 python -m paprika samples                  # stav, cesta, nástroje a artikulace
-python -m paprika samples install all      # ~2.3 GB; nebo piano|strings|winds|brass|mallets
+python -m paprika samples install all      # ~4.5 GB; nebo piano|strings|winds|brass|mallets|percussion|voices
 ```
 
 Vzorky leží v `%LOCALAPPDATA%\paprika\samples` (jinde `~/.paprika/samples`),
@@ -146,6 +146,8 @@ jinam přes proměnnou `PAPRIKA_SAMPLES`. Instalace pokračuje, kde skončila.
 | winds | `flute` (`sus nv exp stac`), `oboe` (`sus nv stac`), `clarinet` (`sus stac`), `bassoon` (`sus vib stac`) |
 | brass | `horn` (`sus stac mute`), `trumpet` (`sus vib stac mute`), `trombone` (`sus vib stac`), `tuba` (`sus stac`) |
 | mallets | `marimba`, `glockenspiel`, `xylophone` |
+| percussion | `timpani` (`hit roll`) — pět kotlů, úder dozní sám, víření drží smyčkou |
+| voices | `male_choir`, `basso`, `tenor` (`aah oh ooh eh`) |
 
 ```python
 piano = s.track("grand_piano", fx="default")        # Hall
@@ -157,6 +159,17 @@ s.track("celli.pizz").notes("D3:1 _:1 A2:1 _:1", bar=8)
 
 - **Velocity mění barvu**, ne jen hlasitost (dynamické vrstvy nahrávky):
   piano 16 vrstev, smyčce 2–3. Piš dynamiku 40–115, ne všude 100.
+  Pozor na hranici vrstev (u dvou vrstev 64): humanize kolem ní nahodile
+  přepíná nahrávky — piš buď zřetelně pod, nebo nad.
+- **Plynulá dynamika** `t.automate("dyn", [(takt, faktor), ...])` — jako
+  modwheel ve filmových knihovnách: faktor násobí velocity not v čase a
+  vrstvy nahrávky se prolnou (±12 velocity kolem hranice), takže jeden
+  dlouhý tón umí crescendo i decrescendo. 1.0 = beze změny. Jen
+  samplované stopy::
+
+      violins.note("D5", at=0, dur=16, vel=110)
+      violins.automate("dyn", [(0, 0.3), (3, 1.0), (4, 0.6)], "s")
+
 - **Pedál** `t.pedal(bars=(od, do), every=1)` — nota, která skončí při
   sešlápnutí, zní do uvolnění; `every` přešlápne se změnou harmonie.
   Funguje i na syntetizovaných stopách.
@@ -169,7 +182,26 @@ s.track("celli.pizz").notes("D3:1 _:1 A2:1 _:1", bar=8)
 - **Vlastní knihovny**: `s.track(Sampler("cesta/k/nastroji.sfz", legato=True))`.
 - Ukázka: `songs/divadlo.py` (křídlo + smyčce + harfa + roh).
 
-**Licence:** VSCO 2 CE je CC0. Salamander Grand Piano je **CC-BY 3.0** —
+**Zpěv (skupina `voices`)** je z VocalSet: mužský sbor (šest zpěváků na
+klávesu, rozestavění do stran, bez vibrata), `basso` (nejhlubší hlas sady,
+operní vibrato, E2–F4) a `tenor` (C3–C5); ženský sbor `female_choir` (šest
+zpěvaček ze devíti na klávesu), `soprano` (F#3–A5, zpívá nejvýš) a `alto`
+(F#3–G5, nejtmavší barva). Artikulace je samohláska, velocity přepíná
+piano / forte nahrávky. Instalace nahrávky rozřeže na jednotlivé tóny,
+oktávu každého ověří řadou harmonických a pod nejnižší zazpívaný tón
+dopočítá tři hlubší přes TD-PSOLA (výška klesne, samohláska zůstane),
+zpěvačkám i dva nad nejvyšší dlouhý tón (soprán nad A5 už ladí nepřesně):
+
+```python
+choir = s.track("male_choir.ooh", fx="default")       # katedrála
+choir.chord(["D2", "A2", "F3"], bar=0, dur=8)
+basso = s.track("basso.aah", fx="default")            # sólo = mono = legato
+basso.melody("D3:2 >A2:2 | F3:3 E3:1", bar=4)
+```
+
+**Licence:** VocalSet je **CC BY 4.0** — ve hře uveď „Vocals from VocalSet
+by J. Wilkins, P. Seetharaman, A. Wahl and B. Pardo, licensed under CC BY 4.0“.
+VSCO 2 CE je CC0. Salamander Grand Piano je **CC-BY 3.0** —
 ve hře uveď v titulcích „Salamander Grand Piano V3 by Alexander Holm,
 licensed under CC-BY 3.0“. Znění je i v `CREDITS.txt` ve složce vzorků.
 
@@ -378,7 +410,8 @@ paprika/
   sfz.py          SFZ text -> regiony (hlavičky, #define, #include)
   sampler.py      Sampler: vrstvy, round robin, smyčky, legato, mmap WAV
   library.py      katalog samplovaných nástrojů, cesta ke vzorkům
-  install.py      stažení Salamander + VSCO 2 CE, generování SFZ
+  install.py      stažení Salamander + VSCO 2 CE + VocalSet, generování SFZ
+  voices.py       VocalSet -> tóny (YIN, oktáva z harmonických, TD-PSOLA) -> SFZ
   render.py       stopy -> busy -> master -> stereo buffer -> WAV
   analyze.py    mix report + hudební warningy
   reference.py  analýza externí nahrávky (tempo/key/akordy/dynamika)

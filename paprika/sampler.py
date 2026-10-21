@@ -18,6 +18,7 @@ from scipy.io import wavfile
 from . import sfz as _sfz
 
 __all__ = ["Sampler", "SampleError", "load_wav", "to_float", "clear_cache",
+           "layer_weights",
            "LEGATO_OFFSET", "LEGATO_XFADE", "TAIL_CAP", "UNDAMPED_RELEASE"]
 
 LEGATO_OFFSET = 0.08      # s: legato nota začíná za nasazením smyčce / jazyku
@@ -25,6 +26,7 @@ LEGATO_XFADE = 0.08       # s: prolnutí dvou legato not
 EDGE_FADE = 0.002         # s: fade na krajích hlasu, jinak to lupne
 UNDAMPED_RELEASE = 2.0    # s: struny bez dusítek (nejvyšší oktávy piana)
 TAIL_CAP = 8.0            # s: strop doznění pro délku bufferu
+DYN_XFADE = 24.0          # velocity: šířka prolnutí dvou vrstev při `dyn`
 LOOPING = ("loop_continuous", "loop_sustain")
 
 _WAVS: dict = {}          # cesta -> (sr, data); data je mmap, žádná kopie
@@ -210,6 +212,28 @@ class Sampler:
             chosen = [ordered[rr_index % len(ordered)]]
         return chosen + [r for r in cands if r.seq_length <= 1]
 
+    def layers(self, pitch: int, rr_index: int = 0) -> list:
+        """Velocity vrstvy pro notu: `[(lovel, hivel, regiony)]` od nejtišší.
+
+        Pro plynulou dynamiku (`dyn`): mezi sousedními vrstvami se prolíná.
+        Vrstvy se stejnými regiony se slijí do jedné.
+        """
+        out = []
+        for lo, hi in sorted({(r.lovel, r.hivel) for r in self.regions}):
+            regs = self.select(pitch, (lo + hi) // 2, rr_index)
+            if out and [id(r) for r in out[-1][2]] == [id(r) for r in regs]:
+                out[-1] = (out[-1][0], hi, regs)
+            else:
+                out.append((lo, hi, regs))
+        return out
+
+    def gain_curve(self, region, vel: np.ndarray) -> np.ndarray:
+        """`gain` po samplech: velocity jako pole (plynulá dynamika)."""
+        v = np.clip(np.asarray(vel, dtype=np.float64), 1.0, 127.0) / 127.0
+        db = (region.volume + self.gain_db
+              + region.veltrack / 100.0 * 40.0 * np.log10(v))
+        return (10.0 ** (db / 20.0)).astype(np.float32)
+
     def gain(self, region, vel: int) -> float:
         """Zisk noty: SFZ zákon velocity (`amp_veltrack`) + hlasitost."""
         v = max(1, min(127, int(vel))) / 127.0
@@ -281,3 +305,30 @@ class Sampler:
         if e_n > 0:
             env[n - e_n:] *= np.linspace(1.0, 0.0, e_n, dtype=np.float32)
         return env
+
+
+def layer_weights(vel: np.ndarray, bounds) -> np.ndarray:
+    """Váhy vrstev `(počet vrstev, n)` pro velocity v čase.
+
+    Uvnitř vrstvy zní jen ona; kolem hranice dvou vrstev (±`DYN_XFADE`/2,
+    u úzkých vrstev méně) se prolnou equal-power. Pod nejnižší a nad
+    nejvyšší vrstvou platí krajní vrstva.
+    """
+    e = np.asarray(vel, dtype=np.float64)
+    k = len(bounds)
+    w = np.zeros((k, e.size), dtype=np.float64)
+    for i, (lo, hi) in enumerate(bounds):
+        low = -np.inf if i == 0 else lo - 0.5
+        high = np.inf if i == k - 1 else hi + 0.5
+        w[i] = (e >= low) & (e < high)
+    for i in range(k - 1):
+        (lo0, hi0), (lo1, hi1) = bounds[i], bounds[i + 1]
+        z = min(DYN_XFADE / 2, (hi0 - lo0 + 1) / 2, (hi1 - lo1 + 1) / 2)
+        edge = (hi0 + lo1) / 2.0
+        zone = (e >= edge - z) & (e < edge + z)
+        if not zone.any():
+            continue
+        u = (e[zone] - (edge - z)) / (2 * z)
+        w[i, zone] = np.cos(u * np.pi / 2)
+        w[i + 1, zone] = np.sin(u * np.pi / 2)
+    return w.astype(np.float32)

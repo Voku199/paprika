@@ -120,7 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="skutečné nástroje (piano, smyčce, ...): stav a instalace vzorků")
     smsub = sm.add_subparsers(dest="samples_cmd")
     si = smsub.add_parser("install", help="stáhne a připraví vzorky skupiny")
-    si.add_argument("group", help="piano, strings, winds, brass, mallets nebo all")
+    si.add_argument("group", help="piano, strings, winds, brass, mallets, voices nebo all")
 
     pr = sub.add_parser("presets", help="vypíše presety, bicí sady a SFX")
     pr.add_argument("--tag", help="jen presety s tagem (orchestral, choir, ...)")

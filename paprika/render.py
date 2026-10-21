@@ -16,7 +16,9 @@ from .fx import FxContext
 from .fx import apply_fx as _apply_fx
 from .note import Note
 from .patch import midi_to_freq
+from .automation import DYN
 from .sampler import Sampler
+from .sampler import layer_weights as _layer_weights
 from . import sfx as _sfx
 from .song import Bus, DrumTrack, SfxTrack, Song, Track
 
@@ -183,13 +185,51 @@ def _add(buf: np.ndarray, i: int, sample: np.ndarray, amp: float) -> None:
     buf[i:end] += part[:, None] if part.ndim == 1 else part
 
 
+def _sampled_voice(sampler, region, pitch, dur, sr, leg_in, leg_out, cache):
+    """Hlas regionu z cache (bez velocity zisku)."""
+    key = (sampler.key(), sampler.region_id(region), pitch, dur, leg_in, leg_out, sr)
+    voice = cache.get(key)
+    if voice is None:
+        voice = sampler.voice(region, pitch, dur, sr, leg_in, leg_out)
+        cache[key] = voice
+    return voice
+
+
+def _dyn_voice(sampler, pitch, dur, vel, idx, leg_in, leg_out, curve, sr, cache):
+    """Nota s plynulou dynamikou: vrstvy prolnuté podle `vel * curve` v čase.
+
+    `curve(m)` vrátí faktor dynamiky pro prvních `m` samplů od začátku noty.
+    """
+    layers = sampler.layers(pitch, idx)
+    bounds = [(lo, hi) for lo, hi, _ in layers]
+    m = int((dur + sampler.tail) * sr) + 1
+    eff = np.clip(vel * curve(m), 1.0, 127.0)
+    weights = _layer_weights(eff, bounds)
+    parts = []
+    for (_, _, regions), w in zip(layers, weights):
+        if not w.any():
+            continue
+        for region in regions:
+            v = _sampled_voice(sampler, region, pitch, dur, sr, leg_in, leg_out, cache)
+            k = min(len(v), m)
+            parts.append((v[:k], w[:k] * sampler.gain_curve(region, eff[:k])))
+    out = np.zeros((max((len(v) for v, _ in parts), default=1), 2), np.float32)
+    for v, g in parts:
+        out[:len(v)] += v * g[:, None]
+    return out
+
+
 def _render_sampled(track: Track, buf: np.ndarray, ctx: FxContext, cache: dict,
                     beat_offset: float) -> None:
-    """Noty samplované stopy -> hlasy sampleru přičtené do `buf`."""
+    """Noty samplované stopy -> hlasy sampleru přičtené do `buf`.
+
+    Automatizace `dyn` (plynulá dynamika) násobí velocity v čase a prolíná
+    vrstvy; bez ní má každá nota jednu vrstvu a pevný zisk.
+    """
     sampler = track.patch
     sr, n = ctx.sr, buf.shape[0]
     spb = 60.0 / ctx.bpm
-    skey = sampler.key()
+    dyn = next((a for a in getattr(track, "automations", []) if a.target == DYN), None)
     for idx, (start_b, dur_b, vel, pitch, leg_in, leg_out) in enumerate(
             _sampled_events(track)):
         start = start_b - beat_offset
@@ -199,12 +239,14 @@ def _render_sampled(track: Track, buf: np.ndarray, ctx: FxContext, cache: dict,
         if i >= n:
             continue
         dur = round(max(0.01, dur_b * spb), 5)
+        if dyn is not None:
+            def curve(m, at=start_b):
+                return dyn.sample(m, sr, ctx.bpm, ctx.beats_per_bar, at)
+            _add(buf, i, _dyn_voice(sampler, pitch, dur, vel, idx, leg_in, leg_out,
+                                    curve, sr, cache), 1.0)
+            continue
         for region in sampler.select(pitch, vel, idx):
-            key = (skey, sampler.region_id(region), pitch, dur, leg_in, leg_out, sr)
-            voice = cache.get(key)
-            if voice is None:
-                voice = sampler.voice(region, pitch, dur, sr, leg_in, leg_out)
-                cache[key] = voice
+            voice = _sampled_voice(sampler, region, pitch, dur, sr, leg_in, leg_out, cache)
             _add(buf, i, voice, sampler.gain(region, vel))
 
 
@@ -316,7 +358,8 @@ def _automated(owner, n: int, ctx: FxContext, beat_offset: float):
     Po zpracování je potřeba zavolat `clear_curves()` na vrácených efektech.
     """
     vol_a, pan_a, fx_autos = _resolve_automation(
-        owner.name, getattr(owner, "automations", []), owner.fx_chain)
+        owner.name, getattr(owner, "automations", []), owner.fx_chain,
+        sampled=isinstance(getattr(owner, "patch", None), Sampler))
     args = (n, ctx.sr, ctx.bpm, ctx.beats_per_bar, beat_offset)
     for fx, param, a in fx_autos:
         fx.set_curve(param, a.sample(*args))

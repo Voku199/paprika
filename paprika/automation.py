@@ -6,16 +6,20 @@ se děje až v renderu (`sample`), takže změna BPM nic nerozbije.
 
 Cíl je `vol`, `pan`, nebo `<efekt>.<parametr>`, kde `<efekt>` je `Fx.label`
 (jméno třídy malými písmeny, u duplicit `lowpass2`, nebo `name=` efektu).
+Samplované stopy mají navíc `dyn` — plynulou dynamiku (jako modwheel):
+násobí velocity not v čase a prolíná velocity vrstvy nahrávky, takže
+jeden dlouhý tón umí crescendo. Řeší ji render sampleru, ne mix.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["Automation", "CURVES", "fx_labels", "targets", "resolve"]
+__all__ = ["Automation", "CURVES", "DYN", "fx_labels", "targets", "resolve"]
 
 CURVES = ("lin", "exp", "s", "step")
 MIX_TARGETS = ("vol", "pan")
+DYN = "dyn"
 
 
 class Automation:
@@ -83,23 +87,31 @@ def fx_labels(chain) -> dict:
     return out
 
 
-def targets(chain) -> list[str]:
+def targets(chain, sampled: bool = False) -> list[str]:
     """Všechny cíle, které jdou na stopě s tímhle řetězem automatizovat."""
-    out = list(MIX_TARGETS)
+    out = list(MIX_TARGETS) + ([DYN] if sampled else [])
     for label, fx in fx_labels(chain).items():
         out.extend(f"{label}.{p}" for p in getattr(fx, "AUTOMATABLE", ()))
     return out
 
 
-def resolve(owner: str, automations, chain):
+def resolve(owner: str, automations, chain, sampled: bool = False):
     """Rozdělí automatizace na (vol, pan, [(fx, param, Automation)]).
 
+    `dyn` na samplované stopě přeskočí (řeší ho render sampleru).
     Neznámý cíl → `KeyError` se seznamem dostupných cílů.
     """
     labels = fx_labels(chain)
     vol = pan = None
     fx_autos = []
     for a in automations:
+        if a.target == DYN:
+            if sampled:
+                continue
+            raise KeyError(
+                f"{owner!r}: cíl 'dyn' (plynulá dynamika) umí jen samplované "
+                f"nástroje (grand_piano, violins, ...); k dispozici: "
+                f"{', '.join(targets(chain))}")
         if a.target == "vol":
             vol = a
             continue
@@ -111,6 +123,6 @@ def resolve(owner: str, automations, chain):
         if fx is None or param not in getattr(fx, "AUTOMATABLE", ()):
             raise KeyError(
                 f"{owner!r}: neznámý cíl automatizace {a.target!r}; "
-                f"k dispozici: {', '.join(targets(chain))}")
+                f"k dispozici: {', '.join(targets(chain, sampled))}")
         fx_autos.append((fx, param, a))
     return vol, pan, fx_autos

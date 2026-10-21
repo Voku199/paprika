@@ -16,6 +16,13 @@ class TestPitch(unittest.TestCase):
         self.assertEqual(theory.pitch("Db4"), 61)
         self.assertEqual(theory.pitch("A0"), 21)
 
+    def test_enharmonics_across_octave(self):
+        # oktáva patří písmenu, ne výsledné třídě tónu
+        self.assertEqual(theory.pitch("B#3"), 60)
+        self.assertEqual(theory.pitch("Cb4"), 59)
+        self.assertEqual(theory.pitch("E#4"), 65)
+        self.assertEqual(theory.pitch("Fb4"), 64)
+
     def test_roundtrip(self):
         for p in range(21, 108):
             self.assertEqual(theory.pitch(theory.note_name(p)), p)

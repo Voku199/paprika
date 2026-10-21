@@ -11,29 +11,14 @@ import numpy as np
 
 from . import metrics as _metrics
 from . import theory
+from .rules import EPS, Warning_, harmony_lines, theory_warnings
 from .song import DrumTrack, Song
 
-__all__ = ["report", "warnings_for", "band_energy", "db", "Warning_"]
+__all__ = ["report", "warnings_for", "model_warnings", "check_report",
+           "band_energy", "db", "Warning_"]
 
 BANDS = ((0.0, 250.0), (250.0, 4000.0), (4000.0, 22050.0))
 BAND_NAMES = ("low", "mid", "high")
-
-
-class Warning_:
-    """Jedno hlášení. `level` je WARN nebo INFO."""
-
-    __slots__ = ("level", "where", "text")
-
-    def __init__(self, level: str, where: str, text: str):
-        self.level = level
-        self.where = where
-        self.text = text
-
-    def line(self) -> str:
-        return f"{self.level:<4}  {self.where:<14} {self.text}"
-
-    def __repr__(self) -> str:  # pragma: no cover
-        return f"<{self.level} {self.where}: {self.text}>"
 
 
 def db(x: float) -> float:
@@ -103,20 +88,27 @@ def _ranges(bars: list[int]) -> list[tuple[int, int]]:
     return out
 
 
+def _in_plan_chord(song: Song, note) -> bool:
+    """Tón patří do akordu harmonického plánu (C# nad A v d moll není chyba)."""
+    span = song.chord_at(note.start_beat + EPS) if song.plan else None
+    return span is not None and note.pitch % 12 in span.chord.pcs
+
+
 def _out_of_scale(song: Song, warns: list) -> None:
     pcs = set(song.scale_pcs())
     for t in song.tracks:
         if t.chromatic or isinstance(t, DrumTrack):
             continue
         bad = [(n.pitch, _bar_of(song, n.start_beat))
-               for n in t.all_notes() if n.pitch % 12 not in pcs]
+               for n in t.all_notes()
+               if n.pitch % 12 not in pcs and not _in_plan_chord(song, n)]
         if not bad:
             continue
         for p, bar in bad[:4]:
             warns.append(Warning_(
                 "WARN", t.name,
                 f"bar {bar}   {theory.note_name(p)} mimo "
-                f"{song.key} {song.scale}"))
+                f"{song.key} {song.scale}", bar))
         if len(bad) > 4:
             warns.append(Warning_(
                 "INFO", t.name,
@@ -222,10 +214,11 @@ def _dissonance(song: Song, warns: list) -> None:
                 if b.start_beat >= a.end_beat:
                     break
                 if abs(a.pitch - b.pitch) == 1 and b.pitch < 48:
+                    bar = _bar_of(song, a.start_beat)
                     warns.append(Warning_(
                         "WARN", t.name,
-                        f"bar {_bar_of(song, a.start_beat)}   ostrá disonance "
-                        f"{a.name}+{b.name} v base"))
+                        f"bar {bar}   ostrá disonance "
+                        f"{a.name}+{b.name} v base", bar))
                     reported += 1
                     break
             if reported >= 3:
@@ -331,12 +324,13 @@ def _sample_range(song: Song, warns: list) -> None:
         for n in t.all_notes():
             if lo <= n.pitch <= hi:
                 continue
+            bar = _bar_of(song, n.start_beat)
             warns.append(Warning_(
                 "WARN", t.name,
-                f"bar {_bar_of(song, n.start_beat)}: {theory.note_name(n.pitch)} "
+                f"bar {bar}: {theory.note_name(n.pitch)} "
                 f"je mimo rozsah nástroje ({theory.note_name(lo)}–"
                 f"{theory.note_name(hi)}) — vzorek se natáhne a zní "
-                f"nepřirozeně; transponuj o oktávu"))
+                f"nepřirozeně; transponuj o oktávu", bar))
             reported += 1
             break                 # jedna hláška na stopu
         if reported >= 3:
@@ -386,8 +380,46 @@ def warnings_for(song: Song, audio: np.ndarray, buffers: dict,
     _gaps(song, warns)
     _static_sound(song, warns)
     _sample_range(song, warns)
+    warns.extend(theory_warnings(song))
     warns.sort(key=lambda w: 0 if w.level == "WARN" else 1)
     return warns
+
+
+def model_warnings(song: Song) -> list:
+    """Pravidla, která nepotřebují audio (stupnice, dynamika, rozsahy,
+    teorie) — `check` je pustí bez renderu. WARN před INFO."""
+    warns: list = []
+    _out_of_scale(song, warns)
+    _robotic(song, warns)
+    _dissonance(song, warns)
+    _gaps(song, warns)
+    _static_sound(song, warns)
+    _sample_range(song, warns)
+    warns.extend(theory_warnings(song))
+    warns.sort(key=lambda w: 0 if w.level == "WARN" else 1)
+    return warns
+
+
+def check_report(song: Song, bars=None, name: str | None = None) -> str:
+    """Report bez renderu: souhrn harmonie, kadence a pravidla nad modelem.
+    `bars=(od, do)` omezí harmonii i hlášení, která znají svůj takt."""
+    title = name or song.title or "bez souboru"
+    lines = [f"PAPRIKA CHECK  {title}",
+             f"skladba  {song.bpm:g} BPM  {song.key} {song.scale}  "
+             f"{song.bars} taktů  {len(song.tracks)} stop  teorie: {song.theory}"]
+    if bars:
+        lines[-1] += f"   jen bars {bars[0]}-{bars[1]}"
+    lines.append("")
+    lines.extend(harmony_lines(song, bars))
+    lines.append("")
+    warns = model_warnings(song)
+    if bars:
+        lo, hi = bars
+        warns = [w for w in warns if w.bar is None or lo <= w.bar < hi]
+    lines.extend(w.line() for w in warns)
+    if not warns:
+        lines.append("OK    žádné warningy")
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------

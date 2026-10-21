@@ -12,8 +12,10 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import drums as _drums
+from . import harmony as _harmony
 from . import note as _note
 from . import theory
+from .harmony import ChordSpan
 from .note import Note
 from .library import (instrument as _sampled_instrument, instrument_defaults,
                       instrument_fx, is_sampled)
@@ -21,8 +23,11 @@ from .patch import Patch
 from .presets import preset
 from .sampler import Sampler
 
-__all__ = ["Song", "Track", "DrumTrack", "SfxTrack", "Bus", "Clip",
-           "suppress_render"]
+__all__ = ["Song", "Track", "DrumTrack", "SfxTrack", "Bus", "Clip", "Section",
+           "THEORY_MODES", "suppress_render"]
+
+# přísnost kontroly teorie (rules.py): free = cinematic/pop, strict = učebnice
+THEORY_MODES = ("free", "strict", "off")
 
 # Když skladbu importuje CLI, `Song.render()` uvnitř souboru se má chovat jako
 # no-op — jinak by se renderovalo dvakrát. CLI si tenhle přepínač zapíná samo.
@@ -44,6 +49,15 @@ class suppress_render:
         global _SUPPRESS_RENDER
         _SUPPRESS_RENDER = self._prev
         return False
+
+
+@dataclass
+class Section:
+    """Pojmenovaný úsek skladby v taktech, `end_bar` už do něj nepatří."""
+
+    name: str
+    start_bar: int
+    end_bar: int
 
 
 @dataclass
@@ -488,7 +502,15 @@ class Song:
 
     def __init__(self, bpm: float = 120, key: str = "C", scale: str = "major",
                  bars: int = 16, beats_per_bar: float = 4,
-                 sample_rate: int = 44100, title: str | None = None):
+                 sample_rate: int = 44100, title: str | None = None,
+                 theory: str = "free"):
+        if theory not in THEORY_MODES:
+            raise ValueError(f"theory={theory!r} neznám; k dispozici: "
+                             f"{', '.join(THEORY_MODES)}")
+        self.theory = theory
+        # harmonický plán (absolutní beaty, seřazený) a sekce
+        self.plan: list[ChordSpan] = []
+        self.sections: list[Section] = []
         self.bpm = float(bpm)
         self.key = str(key)
         self.scale = str(scale)
@@ -616,6 +638,56 @@ class Song:
 
     def note_count(self) -> int:
         return sum(len(t) for t in self.tracks)
+
+    # -- harmonie a forma -------------------------------------------------
+    def harmony(self, text: str, bar: float = 0):
+        """Harmonický plán od taktu `bar`: jména akordů nebo římské číslice
+        vůči `key`/`scale`, ``|`` odděluje takty (viz `paprika.harmony`)::
+
+            s.harmony("Dm | Bb | Gm | Gm:2 A:2")
+            s.harmony("i | VI | iv | V7/V", bar=8)
+
+        Plán neovlivní zvuk; podle něj `check` a report hlídají bas, nevlastní
+        tóny a kadence. Nové volání přepíše plán v taktech, které pokryje.
+        """
+        spans = _harmony.parse_harmony(text, self.key, self.scale,
+                                       self.beats_per_bar, bar_offset=int(bar))
+        if not spans:
+            return self
+        off = float(bar) * self.beats_per_bar
+        lo, hi = off, off + spans[-1].end_beat
+        kept = []
+        for old in self.plan:
+            if lo - 1e-9 <= old.start_beat < hi - 1e-9:
+                continue
+            if old.start_beat < lo < old.end_beat:
+                old = ChordSpan(old.start_beat, lo - old.start_beat, old.chord,
+                                old.source)
+            kept.append(old)
+        kept.extend(ChordSpan(s.start_beat + off, s.dur_beats, s.chord, s.source)
+                    for s in spans if s.chord is not None)
+        self.plan = sorted(kept, key=lambda s: s.start_beat)
+        return self
+
+    def chord_at(self, beat: float) -> ChordSpan | None:
+        """Akord plánu, který platí v daném beatu (None mimo plán)."""
+        for span in self.plan:
+            if span.start_beat <= beat < span.end_beat:
+                return span
+            if span.start_beat > beat:
+                break
+        return None
+
+    def section(self, name: str, bars):
+        """Pojmenuje úsek `bars=(od, do)` — kadence se hodnotí na jeho konci,
+        v MIDI je z něj marker."""
+        lo, hi = int(bars[0]), int(bars[1])
+        if hi <= lo:
+            raise ValueError(f"section {name!r}: bars=(od, do) musí mít do > od, "
+                             f"dostal jsem {bars!r}")
+        self.sections.append(Section(str(name), lo, hi))
+        self.sections.sort(key=lambda s: s.start_bar)
+        return self
 
     # -- výstup -----------------------------------------------------------
     def render(self, path: str | None = None, report: bool = True,

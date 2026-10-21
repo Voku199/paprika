@@ -1,4 +1,4 @@
-"""CLI: ``python -m paprika render|show|play``.
+"""CLI: ``python -m paprika render|show|check|midi|play``.
 
 Skladba je normální Python modul. `render` ho naimportuje a najde na úrovni
 modulu právě jednu instanci `Song` — tu vyrenderuje.
@@ -102,6 +102,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--bars", help="rozsah taktů, např. 0:4")
     s.add_argument("--res", type=int, default=8, help="znaků na takt (výchozí 8)")
 
+    c = sub.add_parser(
+        "check",
+        help="hudební teorie a pravidla nad notami bez renderu (vteřina)")
+    c.add_argument("song", help="cesta k songs/*.py")
+    c.add_argument("--bars", help="rozsah taktů, např. 0:8")
+
+    m = sub.add_parser(
+        "midi", help="zapíše skladbu do MIDI (stopy, tempo, sekce, akordy plánu)")
+    m.add_argument("song", help="cesta k songs/*.py")
+    m.add_argument("-o", "--out", help="výstupní .mid (jinak output/<jméno>.mid)")
+
     pl = sub.add_parser("play", help="otevře WAV systémovým přehrávačem")
     pl.add_argument("wav", help="cesta k .wav")
 
@@ -151,6 +162,20 @@ def main(argv=None) -> int:
         elif args.cmd == "show":
             song, _ = load_song(args.song)
             print(song.show(bars=_parse_bars(args.bars), res=args.res))
+        elif args.cmd == "check":
+            from .analyze import check_report
+            song, _ = load_song(args.song)
+            bars = _parse_bars(args.bars)
+            if bars and bars[1] is None:
+                bars = (bars[0], song.bars)
+            print(check_report(song, bars=bars, name=os.path.basename(args.song)))
+        elif args.cmd == "midi":
+            from .midi import export
+            song, _ = load_song(args.song)
+            out = args.out or os.path.splitext(default_output(args.song, song))[0] + ".mid"
+            for note in export(song, out):
+                print(f"INFO  {note}")
+            print(f"-> {out}")
         elif args.cmd == "play":
             _open_file(args.wav)
         elif args.cmd == "analyze-ref":

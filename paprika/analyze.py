@@ -113,7 +113,7 @@ def _out_of_scale(song: Song, warns: list) -> None:
             warns.append(Warning_(
                 "INFO", t.name,
                 f"a dalších {len(bad) - 4} not mimo stupnici "
-                f"(chromatic=True to hlášení vypne)"))
+                f"(chromatic=True nebo akord v s.harmony() to hlášení vypne)"))
 
 
 def _levels(song: Song, audio: np.ndarray, raw_peak: float, warns: list) -> None:

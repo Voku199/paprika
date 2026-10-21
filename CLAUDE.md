@@ -14,7 +14,10 @@ Current goal (engine v2, 2026-09): varied instrumental Arcane-style soundtrack
 for a Unity game. Specs live in `docs/superpowers/specs/`; engine v2 and the
 SFZ sampler (`2026-09-24-sampler-design.md`, pulled forward because synthesis
 still sounded "chiptune") are done; next sub-projects are style packs +
-`/paprika` skill and game export (loops, stems, stingers).
+`/paprika` skill and game export (loops, stems, stingers). The AI-engine
+roadmap (`docs/superpowers/research/2026-10-21-ai-engine-pruzkum.md`) phase 1
+— harmony plan, theory checks, MIDI export — is done
+(`docs/superpowers/plans/2026-10-21-teorie-midi.md`).
 
 The library is *not* a music generator — melody, harmony and structure are
 written by the author (usually the AI). Paprika supplies theory, synthesis, FX,
@@ -37,13 +40,15 @@ python -m paprika render songs/romantic.py               # WAV + report
 python -m paprika render songs/x.py --bars 0:8           # fast preview slice
 python -m paprika render songs/x.py --waveform --play    # + envelope, then open
 python -m paprika show   songs/x.py --bars 12:16 --res 16  # ASCII roll, no render
+python -m paprika check  songs/x.py --bars 8:16          # theory + model rules, no render
+python -m paprika midi   songs/x.py                      # output/x.mid
 python -m paprika play   output/x.wav
 python -m paprika presets
 python -m paprika compare ref.mp3 output/x.wav          # mix metrics vs a reference
 python -m paprika samples                               # sampler: path, groups, instruments
 python -m paprika samples install all                   # ~2.3 GB, resumable
 
-python -m pytest tests/                                  # ~430 tests, ~75 s
+python -m pytest tests/                                  # ~520 tests, ~75 s
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py     # renders every song, ~2 min
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # installed samples: level + tuning
 python -m pytest tests/test_render.py::TestLimiter::test_tames_overs
@@ -65,11 +70,21 @@ optional and never double-renders. Output path falls back to
 `<repo>/output/<song-basename>.wav`, derived from the *parent of the parent* of
 the song path.
 
+Write the harmony first: `s.harmony("i | VI | iv | V")` (and `s.section()`),
+then the parts, then `python -m paprika check` — it reports wrong bass notes,
+unresolved non-chord tones, parallels and cadences per bar in about a second.
+The plan, sections and `Song(theory=...)` are metadata: they never change the
+sound (render stays bit-identical). A chord tone from the plan is not "out of
+scale", so `chromatic=True` is only for genuinely chromatic lines.
+
 ## Architecture
 
 Layer boundaries are deliberately sharp — keep them:
 
 - `theory.py` — MIDI ints only (C4 = 60). Knows nothing about audio.
+- `harmony.py` — harmony plan text (chord names *and* Roman numerals relative to
+  key/scale) -> `ChordSpan`s; `roman_of`, `key_signature`, `pc_name` (spelling
+  by scale degree), `cadence`. Pitch classes only, knows no `Song`.
 - `note.py` — parses notation strings into `Note` (pitch, start_beat, dur_beats, velocity, glide).
 - `song.py` — `Song` / `Track` / `DrumTrack` / `SfxTrack` / `Bus` / `Clip`. Pure data model, no files, no CLI.
 - `dsp.py` — pure array DSP (biquads, time-varying filters, LFO, noise, Karplus-Strong, synthetic IR, polyBLEP). No model, no theory.
@@ -97,7 +112,14 @@ Layer boundaries are deliberately sharp — keep them:
 - `metrics.py` — mix metrics of a finished buffer/file (7 bands, width, crest, LRA); used by the report and `compare`. Reads only audio.
 - `mastering.py` — ready-made master chains built from existing effects.
 - `render.py` — model → stereo buffers → buses → master → WAV. Knows no music theory.
-- `analyze.py` — reads only the finished buffer + the data model.
+- `rules.py` — music-theory rules over the data model only (no audio): bass vs
+  plan, chord coverage, non-chord tones on strong beats, parallels, leading
+  tone, melodic leaps, low thirds; strict adds spacing/crossing. Owns
+  `Warning_` (with optional `bar`); `analyze` re-exports it.
+- `analyze.py` — reads only the finished buffer + the data model;
+  `model_warnings` (no audio) feeds `check_report` and `warnings_for`.
+- `midi.py` — hand-written SMF format 1 writer + reader (running status). Reads
+  only the model.
 - `viz.py`, `cli.py` — ASCII output, argparse.
 
 **Everything is in beats, never seconds.** Conversion to samples happens once, in
@@ -222,10 +244,15 @@ merge into one voice; same pitch without `>` retriggers (808 patterns).
   `_feedback_delay`, `_allpass`) so recursion stays vectorized; IIR filters go
   through scipy `lfilter` (block-wise with carried `zi` when time-varying, see
   `dsp.filt_varying`, `dsp.onepole`). Do not write per-sample Python loops.
-- **New warning rule** — a `_rule(song, ..., warns)` function in `analyze.py`
-  appending `Warning_("WARN"|"INFO", where, text)`, wired into `warnings_for`.
-  Rules must cap their output (existing ones stop after 3–4 hits) so the report
-  stays readable. Ignore near-silent bars (convolution leaves ~1e-17 noise).
+- **New warning rule** — a `_rule(song, ..., warns)` function appending
+  `Warning_("WARN"|"INFO", where, text, bar)`: audio rules in `analyze.py`
+  wired into `warnings_for`, model-only rules into `model_warnings` (so
+  `check` runs them without a render), music-theory rules in `rules.py`
+  wired into `theory_warnings`. Rules must cap their output (existing ones stop
+  after 3–4 hits) so the report stays readable. Ignore near-silent bars
+  (convolution leaves ~1e-17 noise). Theory rules must stay quiet on real songs
+  in `theory="free"` (doublings, arpeggios/ostinatos and pads are intentional;
+  tolerate humanize with `rules.EPS`) — check `songs/` before adding a WARN.
 - `__init__.py` re-exports the public API explicitly; anything user-facing goes
   in both the imports and `__all__`.
 

@@ -1,11 +1,15 @@
+import io
 import os
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stdout
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from paprika import Song  # noqa: E402
 from paprika.analyze import check_report, model_warnings, warnings_for  # noqa: E402
+from paprika.cli import main  # noqa: E402
 from paprika.harmony import HarmonyError  # noqa: E402
 from paprika.render import render_song  # noqa: E402
 from paprika.rules import theory_warnings  # noqa: E402
@@ -302,6 +306,51 @@ class TestCheckReport(unittest.TestCase):
         out = render_song(s, None, report=False)
         warns = warnings_for(s, out.audio, out.tracks, out.raw_peak)
         self.assertTrue(found(warns, "nepatří do akordu"))
+
+
+SONG_FILE = """
+from paprika import Song
+s = Song(bpm=100, key="C", scale="major", bars=2)
+s.harmony("C | F").section("A", bars=(0, 2))
+s.track("organ", name="bass").notes("C3:4 | D3:4")
+"""
+
+
+class TestCheckCli(unittest.TestCase):
+    def run_cli(self, *args):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = main(list(args))
+        return code, buf.getvalue()
+
+    def test_check_without_render(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "songs", "x.py")
+            os.makedirs(os.path.dirname(path))
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(SONG_FILE)
+            code, out = self.run_cli("check", path)
+            self.assertEqual(code, 0)
+            self.assertIn("PAPRIKA CHECK  x.py", out)
+            self.assertIn("HARMONIE A (0–1)", out)
+            self.assertIn("nepatří do akordu", out)
+            self.assertFalse(os.path.exists(os.path.join(d, "output")))
+            code, out = self.run_cli("check", path, "--bars", "0:1")
+            self.assertNotIn("nepatří do akordu", out)
+
+
+class TestShowChords(unittest.TestCase):
+    def test_chord_row(self):
+        s = song(bars=2).harmony("C | Gm:2 A7:2")
+        s.track("organ", name="lead").notes("C4:4 | D4:4")
+        lines = s.show(res=8).splitlines()
+        self.assertEqual(lines[1], "chords |C       |Gm  A7  |")
+        self.assertTrue(lines[2].startswith("lead"))
+
+    def test_no_plan_no_row(self):
+        s = song(bars=1)
+        s.track("organ", name="lead").notes("C4:4")
+        self.assertNotIn("chords", s.show())
 
 
 if __name__ == "__main__":

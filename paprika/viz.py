@@ -57,6 +57,8 @@ def piano_roll(song: Song, bars=None, res: int = 8) -> str:
     header += "|"
 
     rows = [header]
+    if song.plan:
+        rows.append(_chord_row(song, lo, total, n_bars, res, onset))
     for t in song.tracks:
         cells = ["."] * total
         if isinstance(t, SfxTrack):
@@ -98,6 +100,26 @@ def piano_roll(song: Song, bars=None, res: int = 8) -> str:
                 f"takty {lo}-{hi}  ({res} {unit} na takt, "
                 f"malé písmeno = křížek)")
     return "\n".join(rows)
+
+
+def _chord_row(song: Song, lo: int, total: int, n_bars: int, res: int,
+               onset) -> str:
+    """Řádek harmonického plánu: jméno akordu od jeho začátku, '.' bez akordu."""
+    cells = ["."] * total
+    view_start = lo * song.beats_per_bar
+    for span in song.plan:
+        a = 0 if span.start_beat < view_start else onset(span.start_beat)
+        b = min(onset(span.end_beat), total)
+        if b <= a or a >= total or b <= 0:
+            continue
+        for j in range(a, b):
+            cells[j] = " "
+        for k, ch in enumerate(span.chord.label[:b - a]):
+            cells[a + k] = ch
+    line = "chords".ljust(LABEL_WIDTH)
+    for b in range(n_bars):
+        line += "|" + "".join(cells[b * res:(b + 1) * res])
+    return line + "|"
 
 
 def waveform(audio: np.ndarray, sr: int, width: int = 72, height: int = 9,

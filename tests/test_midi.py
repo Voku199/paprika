@@ -1,13 +1,16 @@
+import io
 import os
 import struct
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from paprika import Song  # noqa: E402
+from paprika.cli import main  # noqa: E402
 from paprika.midi import (PPQ, MidiError, _program, export, read,  # noqa: E402
                           to_bytes)
 
@@ -166,6 +169,27 @@ class TestReader(unittest.TestCase):
             export(s, path)
             mid = read(path)
         self.assertEqual(mid.tracks[1].notes[0].pitch, 60)
+
+
+class TestMidiCli(unittest.TestCase):
+    def test_default_path_next_to_wav(self):
+        src = ("from paprika import Song\n"
+               "s = Song(bars=1)\n"
+               "s.track('organ', name='lead').notes('C4:4')\n"
+               "s.sfx().impact(0)\n")
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "songs", "x.py")
+            os.makedirs(os.path.dirname(path))
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(src)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = main(["midi", path])
+            out = os.path.join(d, "output", "x.mid")
+            self.assertEqual(code, 0)
+            self.assertTrue(os.path.isfile(out))
+            self.assertIn("SFX", buf.getvalue())
+            self.assertEqual(read(out).tracks[1].notes[0].pitch, 60)
 
 
 if __name__ == "__main__":

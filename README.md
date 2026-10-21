@@ -57,6 +57,8 @@ python -m paprika render songs/romantic.py              # wav + report
 python -m paprika render songs/romantic.py --bars 0:8   # rychlý preview
 python -m paprika render songs/romantic.py --waveform   # + obálka mixu
 python -m paprika show   songs/romantic.py --bars 0:4   # jen ASCII, bez renderu
+python -m paprika check  songs/divadlo.py               # harmonie a teorie, bez renderu
+python -m paprika midi   songs/divadlo.py               # output/divadlo.mid
 python -m paprika play   output/romantic.wav            # systémový přehrávač
 python -m paprika presets                               # seznam nástrojů
 python -m paprika analyze-ref referencni.mp3             # tempo/key/akordy/dynamika
@@ -268,6 +270,90 @@ rate, depth)` (trance gate), `Chorus`, `Width(amount)`, `BitCrush(bits,
 downsample)`, `Tape(wow, flutter, drive, hiss)`, `Sidechain(zdroj, amount)`
 — zdroj je stopa nebo bus. Každý efekt bere `name=` pro automatizaci.
 
+## Harmonický plán a kontrola teorie
+
+Plán říká, jaký akord má v kterém taktu znít. Zvuk neovlivní; podle něj
+`check` (a report po renderu) hlídá bas, nevlastní tóny, vedení hlasů
+a kadence:
+
+```python
+s = Song(bpm=70, key="D", scale="minor", bars=16)   # theory="free" je výchozí
+s.harmony("Dm | Bb | Gm | Gm:2 A:2")                # jména akordů
+s.harmony("i | VI | iv | V7/V", bar=4)               # římské číslice vůči key/scale
+s.section("A", bars=(0, 8)).section("B", bars=(8, 16))
+```
+
+```bash
+python -m paprika check songs/divadlo.py              # za vteřinu, bez renderu
+python -m paprika check songs/divadlo.py --bars 8:16
+```
+
+- `|` odděluje takty a hlídá délky (`HarmonyError` s číslem taktu), `Gm:2`
+  je akord na dva beaty, akordy bez délky si dělí takt rovným dílem
+  (`Gm A` = po půl taktu), bez `|` je každý akord jeden takt, `_` = bez
+  akordu.
+- Jméno akordu je základ + kvalita z `CHORDS`, lomítko je bas: `Dm/F`.
+- Římská číslice: velká = dur, malá = moll, `o` zmenšený, `ø7` malý
+  zmenšený septakord, `+` zvětšený, `7` diatonická septima (`I7` = Cmaj7,
+  `V7` = G7), `6`/`64`/`65`/`43`/`42` obraty, `add6` přidaná sexta (u jména
+  je to `C6`), lomítko = vedlejší akord (`V/V`, `V7/iv`, `viio7/V`),
+  `b`/`#` posune základ (`bVII`). V mollu se stupně počítají od
+  přirozeného mollu (`VI` = Bb v d moll), `V` je durová dominanta a `viio`
+  stojí na citlivém tónu.
+- Další `harmony()` přes stejné takty plán přepíše — jde psát po sekcích.
+- `show` kreslí nad stopami řádek `chords`.
+
+```
+PAPRIKA CHECK  divadlo.py
+skladba  70 BPM  D minor  32 taktů  9 stop  teorie: free
+
+HARMONIE A (0–7)      i | VI | iv | V | i | III | iv V | i
+AKORDY   i=Dm  VI=Bb  iv=Gm  V=A  III=F
+KADENCE  A (0–7): V → i autentická · ...
+
+INFO  celli          bar 22   paralelní kvinty s horn: F2/C4 → G2/D4
+```
+
+`Song(theory=...)` volí přísnost. `free` (výchozí) je pro cinematic a pop:
+kontroluje samostatné linky (jednohlasé stopy), oktávová zdvojení,
+arpeggia, ostinata a pady bere jako záměr. `strict` je učebnice (chorál,
+kvartet): rozdělí vícehlasé stopy na hlasy a hlásí všechno jako WARN.
+`off` teorii vypne.
+
+| Pravidlo | free | strict |
+|---|---|---|
+| bas na začátku akordu nepatří do akordu (prodleva se nehlásí) | WARN | WARN |
+| v úseku akordu nezní jeho základ nebo tercie | INFO | WARN |
+| nota linky na těžké době mimo akord, nerozvede se krokem (průtah a appoggiatura projdou) | WARN, když je mimo stupnici, jinak INFO | WARN |
+| paralelní kvinty a oktávy mezi linkami | INFO, jen izolované; 3+ po sobě a figurace = záměr | WARN |
+| citlivý tón v nejvyšším hlase ve V → I nejde na tóniku | INFO | WARN |
+| melodie: skok ≥ malá sexta bez návratu, tritón | INFO | WARN |
+| tercie pod G2 držená aspoň beat | WARN | WARN |
+| sousední horní hlasy dál než oktávu, křížení linek | — | WARN |
+
+Nota, která je v akordu plánu, není „mimo stupnici“ — C# v dominantě A
+v d moll je v pořádku i bez `chromatic=True`.
+
+## MIDI export
+
+```bash
+python -m paprika midi songs/divadlo.py               # vedle WAV: output/divadlo.mid
+python -m paprika midi songs/x.py -o hotove/x.mid
+```
+
+```python
+from paprika import export_midi, read_midi
+notes = export_midi(s, "output/x.mid")   # vrátí, co se do MIDI nevešlo
+mid = read_midi("output/x.mid")          # stopy, noty v tickách, události
+```
+
+Standard MIDI File formát 1, 480 ticků na beat. Stopa 0 nese tempo, takt,
+předznamenání, sekce jako markery a akordy plánu jako text (`"Dm (i)"`).
+Každá stopa je vlastní MIDI stopa se jménem a GM programem (piano, smyčce,
+sbor, ...), sustain pedál jde jako CC64, bicí na kanál 10 (kick 36, snare
+38, hat 42, ...). Noty mají humanize časování i velocity. SFX stopy (zvuky,
+ne noty) a automatizace se nevyexportují — export to vypíše.
+
 ## Zpětná vazba
 
 Po renderu se vypíše report:
@@ -287,7 +373,7 @@ Pravidla warningů:
 
 | Pravidlo | Podmínka |
 |---|---|
-| nota mimo stupnici | pitch není ve `Song.scale` a stopa nemá `chromatic=True` |
+| nota mimo stupnici | pitch není ve `Song.scale` ani v akordu plánu a stopa nemá `chromatic=True` |
 | clipping | jakýkoliv sample před limiterem přesáhne 1.0 |
 | špatná hlasitost | peak nad −0.3 dBFS nebo RMS pod −30 dB |
 | frekvenční maskování | dvě stopy mají obě přes 40 % energie ve stejném pásmu a čase |
@@ -296,6 +382,7 @@ Pravidla warningů:
 | díra v aranži | stopa mlčí 4+ takty uprostřed skladby |
 | mono kompatibilita | korelace L/R stopy klesne pod 0 — v mono se vyruší |
 | statický zvuk | melodická stopa přes 16+ taktů bez modulace, automatizace i humanize |
+| teorie | pravidla z [Harmonický plán a kontrola teorie](#harmonický-plán-a-kontrola-teorie) |
 
 | přetížený sub | víc než 15 % výkonu pod 60 Hz (reference 3–7 %) |
 | úzké stereo | šířka mixu pod 8 % u skladby delší než 8 taktů |
@@ -391,6 +478,7 @@ paprika/
   song.py         Song, Track, DrumTrack, SfxTrack, Bus, Clip, timeline
   note.py         Note a parsing notačních řetězců (včetně glide `>`)
   theory.py       stupnice, akordy, obraty, arpeggia
+  harmony.py      harmonický plán: jména akordů, římské číslice, kadence
   dsp.py          biquad filtry, LFO, šum, Karplus-Strong, syntetická IR
   oscillators.py  Sine … FM, SuperSaw, Pulse, Pluck, Additive
   filters.py      LP, HP, BP, Formant
@@ -413,15 +501,17 @@ paprika/
   install.py      stažení Salamander + VSCO 2 CE + VocalSet, generování SFZ
   voices.py       VocalSet -> tóny (YIN, oktáva z harmonických, TD-PSOLA) -> SFZ
   render.py       stopy -> busy -> master -> stereo buffer -> WAV
-  analyze.py    mix report + hudební warningy
-  reference.py  analýza externí nahrávky (tempo/key/akordy/dynamika)
-  viz.py        ASCII piano roll + obálka mixu
-  cli.py        python -m paprika render|show|play|presets|samples|analyze-ref|compare
+  rules.py        pravidla teorie nad notami (bas, nevlastní tóny, paralely, ...)
+  analyze.py      mix report + hudební warningy, check report bez renderu
+  midi.py         MIDI export a čtení (SMF formát 1)
+  reference.py    analýza externí nahrávky (tempo/key/akordy/dynamika)
+  viz.py          ASCII piano roll + obálka mixu
+  cli.py          python -m paprika render|show|check|midi|play|presets|samples|analyze-ref|compare
 ```
 
 Hranice jsou naschvál ostré: `render.py` neví nic o hudební teorii,
-`theory.py` neví nic o zvuku, `analyze.py` čte jen hotový buffer a datový
-model. Noty žijí v beatech, ne v sekundách — změna BPM je jeden parametr.
+`theory.py` a `harmony.py` nevědí nic o zvuku, `rules.py` a `midi.py` čtou
+jen datový model, `analyze.py` jen hotový buffer a datový model. Noty žijí v beatech, ne v sekundách — změna BPM je jeden parametr.
 
 ## Testy
 
@@ -440,5 +530,5 @@ Ostatní testy sampleru běží bez sítě nad malými syntetickými WAV.
 
 Export do hry (smyčky, stemy, vrstvy intenzity,
 stingery), žánrové style packy a Claude Code skill `/paprika` — to jsou další
-podprojekty. Dál chybí zpěv, MIDI, změny tempa uprostřed skladby a
-automatizace na úrovni jednotlivé noty.
+podprojekty. Dál chybí zpěv s textem, import MIDI do skladby, změny tempa
+uprostřed skladby a automatizace na úrovni jednotlivé noty.

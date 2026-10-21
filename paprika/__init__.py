@@ -10,6 +10,7 @@ Typické použití::
     dr = s.drums(kit="trap")
     fx = s.sfx()
 
+    s.harmony("i | i | VI | V")                          # plán pro `check`
     choir.chord("Dm", bar=0, dur=8)
     bass.notes("D1:3 >F1:1 | D1:4", bar=8)
     dr.pattern("k......k..k.....", bars=(8, 16)).roll("h", bar=11, beat=3)
@@ -25,7 +26,8 @@ Knihovna dává teorii, syntézu, efekty, mix a zpětnou vazbu.
 """
 
 from . import dsp
-from .analyze import band_energy, report, warnings_for
+from .analyze import (band_energy, check_report, model_warnings, report,
+                      warnings_for)
 from .automation import Automation
 from .drums import DRUM_CHARS, drum_names, parse_pattern
 from .fx import (EQ, Delay, Filter, Fx, HighPass, LowPass, Reverb, Saturate,
@@ -33,10 +35,13 @@ from .fx import (EQ, Delay, Filter, Fx, HighPass, LowPass, Reverb, Saturate,
 from .fx_dyn import Compressor, Gate
 from .fx_lofi import BitCrush, Tape
 from .fx_space import Chorus, Hall, Width
+from .harmony import HarmonyError, parse_chord, roman_of
 from .kits import kit_names
 from .library import (INSTRUMENTS, SamplesMissing, instrument, instrument_names,
                       samples_root)
 from .mastering import MASTERING_STYLES, mastering
+from .midi import export as export_midi
+from .midi import read as read_midi
 from .note import DEFAULT_VELOCITY, Note, NoteLengthError, NoteParseError, parse
 from .patch import (ADSR, BP, FM, HP, LFO, LP, Additive, Ensemble, Formant, Noise, Osc,
                     Patch, PitchEnv, Pluck, Pulse, Saw, Sine, Square, SuperSaw,
@@ -46,19 +51,21 @@ from .presets import (PRESET_TAGS, PRESETS, preset, preset_fx, preset_names,
 from .render import RenderResult, limiter, mix, render_song, write_wav
 from .sampler import SampleError, Sampler
 from .sfx import SFX_NAMES
-from .song import Bus, Clip, DrumTrack, SfxTrack, Song, Track
+from .song import Bus, Clip, DrumTrack, Section, SfxTrack, Song, Track
 from .theory import (CHORDS, SCALES, TheoryError, arp, chord, in_scale, invert,
                      note_name, pitch, scale, scale_pcs)
 from .viz import piano_roll, waveform
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 __all__ = [
     # model
-    "Song", "Track", "DrumTrack", "SfxTrack", "Bus", "Clip", "Note", "Automation",
+    "Song", "Track", "DrumTrack", "SfxTrack", "Bus", "Clip", "Section", "Note",
+    "Automation",
     # teorie
     "scale", "scale_pcs", "chord", "arp", "invert", "pitch", "note_name",
     "in_scale", "SCALES", "CHORDS", "TheoryError",
+    "HarmonyError", "parse_chord", "roman_of",
     # zvuk
     "Patch", "Osc", "Sine", "Saw", "Square", "Tri", "Noise", "FM",
     "SuperSaw", "Pulse", "Pluck", "Additive",
@@ -74,7 +81,8 @@ __all__ = [
     "BitCrush", "Tape", "mastering", "MASTERING_STYLES",
     # render a zpětná vazba
     "render_song", "RenderResult", "mix", "limiter", "write_wav",
-    "report", "warnings_for", "band_energy", "piano_roll", "waveform",
+    "report", "warnings_for", "model_warnings", "check_report", "band_energy",
+    "piano_roll", "waveform", "export_midi", "read_midi",
     # noty, bicí, sfx
     "parse", "NoteLengthError", "NoteParseError", "DEFAULT_VELOCITY",
     "parse_pattern", "drum_names", "DRUM_CHARS", "kit_names", "SFX_NAMES",

@@ -7,9 +7,13 @@ syntetizuje nádechy s barvou skutečného zpěváka:
 
 1. **Hledání.** Před každým nasazením tónu (YIN, znělý úsek aspoň 0.15 s)
    se hledá šum nad hladinou místnosti, který skončí nejvýš `MAX_LEAD` s
-   před tónem. Rámce s tónovým spektrem (doznívání předchozího tónu, které
-   YIN přehlédne) do nádechu nepatří. Kandidát projde kontrolou spektra: není to dunění (výkon pod
-   150 Hz), cvak (crest), tón (spektrální plochost) ani sykavka.
+   před tónem — v pásmu `DETECT_BAND`, protože šum místnosti je hlavně
+   dunění a brum a širokopásmová hlasitost by tichý nádech schovala. Rámce
+   s tónovým spektrem (doznívání předchozího tónu, které YIN přehlédne) do
+   nádechu nepatří. Spektrum šumu místnosti se změří z nejtišších míst
+   souboru a od spektra kandidáta odečte; kandidát pak projde kontrolou:
+   není to dunění (výkon pod 150 Hz), cvak (crest), tón (spektrální
+   plochost) ani sykavka.
 2. **Popis.** Nádech je šum, takže jeho realističnost je v časovém průběhu
    spektrální obálky, ne v jemné struktuře. Každý nádech se popíše obálkou
    hlasitosti (dB vůči maximu) a tvarem spektra v `BANDS` mel pásmech (dB
@@ -64,6 +68,14 @@ MIN_CENTROID = 500.0   # Hz: tmavší je spíš ruch než dech
 MAX_CENTROID = 9000.0  # Hz: světlejší je sykavka nebo šum elektroniky
 MIN_FLATNESS = 0.05    # spektrální plochost 300 Hz–8 kHz: tón má méně
 MAX_CREST_DB = 22.0    # peak/RMS: cvak, mlasknutí, ťuknutí do mikrofonu
+# šum místnosti ve VocalSet je hlavně dunění pod 150 Hz (změřeno 2026-10-23
+# na 41 souborech: o 14–25 dB na bin silnější než 150 Hz–8 kHz). Nádechy
+# jsou nad ním o 20–30 dB v pásmu 150 Hz–8 kHz, ale jen o ~8 dB pod 150 Hz,
+# a protože širokopásmovou hlasitost dělá dunění, stály jen 3–8 dB nad
+# hladinou: starý detektor našel 66 nádechů z 1485 souborů
+DETECT_BAND = (300.0, 16000.0)   # Hz: hlasitost pro hledání se měří v tomhle pásmu
+NOISE_DB = 3.0         # rámce mimo zpěv do hladiny + tolik = šum místnosti
+SUBTRACT_FLOOR = 0.05  # odečtení šumu nechá aspoň tento podíl výkonu (spektrální podlaha)
 # rámec (20 ms) s plochostí 300 Hz–8 kHz pod tímhle je tón, ne dech: YIN
 # doznívání tónu často nepozná a bez téhle kontroly začínal nádech ještě
 # v předchozím tónu (změřeno na VocalSet male3, 2026-10-23: 40–60 ms
@@ -138,9 +150,33 @@ def _tonal(frames: np.ndarray, sr: int) -> np.ndarray:
     return out
 
 
-def _check(seg: np.ndarray, sr: int) -> tuple[str | None, dict]:
-    """Je úsek dech? Vrací (důvod odmítnutí nebo None, změřené hodnoty)."""
+def _noise(x: np.ndarray, sr: int, quiet: np.ndarray, hs: int) -> dict | None:
+    """Spektrum šumu místnosti z rámců `quiet` (souvislé úseky aspoň jedno
+    okno): Welch pro `_check`, střední výkon STFT pro `describe` a rozptyl."""
+    nfft, hop = _stft_size(sr)
+    win = np.hanning(nfft)
+    welch, stft, var, total = 0.0, 0.0, 0.0, 0
+    for a, b in _runs(quiet):
+        seg = x[a * hs:min(x.size, b * hs)]
+        if seg.size < max(nfft, 1024):
+            continue
+        _, p = signal.welch(seg, sr, nperseg=1024)
+        frames = sliding_window_view(seg, nfft)[::hop]
+        welch = welch + p * seg.size
+        stft = stft + (np.abs(np.fft.rfft(frames * win, axis=1)) ** 2).mean(axis=0) * seg.size
+        var += float(np.sum(seg ** 2))
+        total += seg.size
+    if total == 0:
+        return None
+    return {"welch": welch / total, "stft": stft / total, "var": var / total}
+
+
+def _check(seg: np.ndarray, sr: int, noise: dict | None = None) -> tuple[str | None, dict]:
+    """Je úsek dech? Vrací (důvod odmítnutí nebo None, změřené hodnoty).
+    S `noise` (z `_noise`) se nejdřív odečte spektrum šumu místnosti."""
     f, p = signal.welch(seg, sr, nperseg=min(1024, seg.size))
+    if noise is not None and noise["welch"].size == p.size:
+        p = np.maximum(p - noise["welch"], SUBTRACT_FLOOR * p)
     tot = float(p.sum())
     if tot <= 0.0:
         return "ticho", {}
@@ -171,31 +207,46 @@ def find_breaths(x: np.ndarray, sr: int) -> tuple[list[Breath], Counter]:
     Vrací nalezené nádechy a počty odmítnutých kandidátů podle důvodu
     (`bez nádechu` = před nasazením není šum nad hladinou místnosti).
     """
+    found, rejects, _ = _find(x, sr)
+    return found, rejects
+
+
+def _find(x: np.ndarray, sr: int) -> tuple[list[Breath], Counter, dict | None]:
+    """`find_breaths` + spektrum šumu místnosti souboru (pro `describe`)."""
     x = np.asarray(x, dtype=np.float64)
     pitch, _, hop = voices.track_pitch(x, sr)
     rejects: Counter = Counter()
     nf = pitch.size
     if nf == 0:
-        return [], rejects
+        return [], rejects, None
     hs = max(1, int(round(hop * sr)))
     fw = max(1, int(0.02 * sr))
-    pad = np.zeros(nf * hs + fw)
-    pad[:min(x.size, pad.size)] = x[:pad.size]
-    frames = sliding_window_view(pad, fw)[::hs][:nf]
-    rms_db = 20.0 * np.log10(np.sqrt(np.mean(frames ** 2, axis=1)) + 1e-9)
+
+    def framed(sig):
+        pad = np.zeros(nf * hs + fw)
+        pad[:min(sig.size, pad.size)] = sig[:pad.size]
+        return sliding_window_view(pad, fw)[::hs][:nf]
+
+    frames = framed(x)
+    full_db = 20.0 * np.log10(np.sqrt(np.mean(frames ** 2, axis=1)) + 1e-9)
+    sos = signal.butter(4, [DETECT_BAND[0], min(DETECT_BAND[1], 0.45 * sr)],
+                        btype="bandpass", fs=sr, output="sos")
+    high = signal.sosfiltfilt(sos, x) if x.size > 64 else x
+    rms_db = 20.0 * np.log10(np.sqrt(np.mean(framed(high) ** 2, axis=1)) + 1e-9)
 
     # zpěv: znělé běhy aspoň MIN_SUNG; krátké výpadky YIN uvnitř tónu zalepit
     voiced = _close(~np.isnan(pitch), 3)
     runs = [(a, b) for a, b in _runs(voiced) if (b - a) * hop >= MIN_SUNG]
     if not runs:
-        return [], rejects
+        return [], rejects, None
     sung = np.zeros(nf, dtype=bool)
     for a, b in runs:
         sung[a:b] = True
     near = _dilate(sung, GUARD)
     quiet = rms_db[~near]
     floor = float(np.percentile(quiet if quiet.size else rms_db, FLOOR_PCT))
-    level = float(np.median(rms_db[sung]))
+    level = float(np.median(full_db[sung]))
+    noise = _noise(x, sr, ~near & (rms_db <= floor + NOISE_DB), hs)
     active = (rms_db > floor + ABOVE_FLOOR_DB) & ~near
     cand = np.flatnonzero(active)
     active[cand[_tonal(frames[cand], sr)]] = False
@@ -229,14 +280,17 @@ def find_breaths(x: np.ndarray, sr: int) -> tuple[list[Breath], Counter]:
             continue
         s0, s1 = first * hs, min(x.size, (j + 1) * hs + fw)
         seg = x[s0:s1]
-        why, info = _check(seg, sr)
+        why, info = _check(seg, sr, noise)
         if why:
             rejects[why] += 1
             continue
-        rel = 20.0 * math.log10(float(np.sqrt(np.mean(seg ** 2))) + 1e-12) - level
+        power = float(np.mean(seg ** 2))
+        if noise is not None:
+            power = max(power - noise["var"], SUBTRACT_FLOOR * power)
+        rel = 10.0 * math.log10(power + 1e-24) - level
         found.append(Breath(round(float(s0) / sr, 4), round(float(s1) / sr, 4), round(rel, 2),
                             round(info["centroid"], 1), round(info["flatness"], 4)))
-    return found, rejects
+    return found, rejects, noise
 
 
 # --------------------------------------------------------------------------
@@ -281,26 +335,40 @@ def _power_frames(seg: np.ndarray, sr: int) -> np.ndarray:
     return np.abs(np.fft.rfft(frames * np.hanning(nfft), axis=1)) ** 2
 
 
-def describe(seg: np.ndarray, sr: int) -> np.ndarray:
+def describe(seg: np.ndarray, sr: int, noise: dict | None = None) -> np.ndarray:
     """Vektor nádechu: obálka hlasitosti `K` (dB vůči maximu, ořez na
     `FLOOR_DB`) a tvar spektra `K x BANDS` (dB vůči hlasitosti rámce).
 
-    Tvar spektra v čase k je průměr rámců v okolí vážený jejich výkonem —
-    tiché okraje nádechu (šum místnosti) barvu nezkreslí.
+    Tvar spektra v čase k je průměrné spektrum rámců v okolí (výkon, takže
+    hlasité rámce váží víc a tiché okraje nádechu barvu nezkreslí). S `noise`
+    (z `_noise`) se od každého rámce odečte spektrum šumu místnosti.
     """
     power = _power_frames(seg, sr)
-    fb, _ = _bank(sr, power.shape[1] * 2 - 2)
-    bandp = power @ fb.T + 1e-20
-    frame = power.sum(axis=1) + 1e-20
+    nfft = power.shape[1] * 2 - 2
+    fb, _ = _bank(sr, nfft)
+    # hlasitost rámce jen od F_LO: pod ním model nic nepopisuje a v nahrávkách
+    # je tam hlavně dunění místnosti
+    above = np.fft.rfftfreq(nfft, 1.0 / sr) >= F_LO
+    bandp = power @ fb.T
+    frame = power[:, above].sum(axis=1)
+    if noise is not None and noise["stft"].size == power.shape[1]:
+        # odečítá se v pásmech, ne po binech: periodogram šumu v jednom binu
+        # kolísá a odečtený průměr by v rámci nechal velký zbytek
+        n = noise["stft"]
+        bandp = np.maximum(bandp - (fb @ n)[None, :], SUBTRACT_FLOOR * bandp)
+        frame = np.maximum(frame - float(n[above].sum()), SUBTRACT_FLOOR * frame)
+    bandp = bandp + 1e-20
+    frame = frame + 1e-20
     frame_db = 10.0 * np.log10(frame)
-    shape = 10.0 * np.log10(bandp) - frame_db[:, None]
     u = np.linspace(0.0, 1.0, frame.size) if frame.size > 1 else np.zeros(1)
     uk = np.linspace(0.0, 1.0, K)
     energy = np.maximum(frame_db - frame_db.max(), FLOOR_DB)
     env = np.interp(uk, u, energy) if frame.size > 1 else np.zeros(K)
-    w = np.exp(-((u[None, :] - uk[:, None]) / (1.5 / K)) ** 2) * frame[None, :]
-    w /= w.sum(axis=1, keepdims=True)
-    return np.concatenate([env, (w @ shape).ravel()])
+    # průměrné spektrum okolí (lineárně, pak dB): průměr logaritmů by pásma,
+    # jejichž výkon po odečtení šumu kolísá, systematicky ztlumil
+    g = np.exp(-((u[None, :] - uk[:, None]) / (1.5 / K)) ** 2)
+    shape = 10.0 * np.log10(g @ bandp) - 10.0 * np.log10(g @ frame)[:, None]
+    return np.concatenate([env, shape.ravel()])
 
 
 # --------------------------------------------------------------------------
@@ -380,11 +448,11 @@ def build(root: str, log=print, reuse: bool = True, singers=None) -> str:
                     continue
                 sr, x = voices._load_mono(os.path.join(folder, fn))
                 st["files"] += 1
-                found, rejects = find_breaths(x, sr)
+                found, rejects, noise = _find(x, sr)
                 st["rejected"].update(rejects)
                 for b in found:
                     seg = x[int(b.t0 * sr):int(b.t1 * sr)]
-                    vectors.setdefault(singer, []).append(describe(seg, sr))
+                    vectors.setdefault(singer, []).append(describe(seg, sr, noise))
                     meta.setdefault(singer, []).append({
                         "singer": singer, "vowel": vowel, "dur": b.t1 - b.t0,
                         "rel_db": b.rel_db, "centroid": b.centroid,
@@ -575,7 +643,9 @@ def stats_lines(root: str | None = None) -> list[str]:
 
 def write_examples(out_dir: str, root: str | None = None, count: int = 3) -> list[str]:
     """Skutečné a syntetizované nádechy každého modelu jako WAV k poslechu
-    (srovnané na stejnou hlasitost, -24 dBFS RMS)."""
+    (srovnané na stejnou hlasitost, -24 dBFS RMS). Skutečné mají horní
+    propust na `F_LO`: pod ní model nic nepopisuje a po zesílení tichého
+    nádechu by v nahrávce bylo slyšet hlavně dunění místnosti."""
     data = _read(root)
     full = os.path.join(os.path.abspath(root or samples_root()), "vocalset", "FULL")
     os.makedirs(out_dir, exist_ok=True)
@@ -594,6 +664,8 @@ def write_examples(out_dir: str, root: str | None = None, count: int = 3) -> lis
             path = os.path.join(full, *rel.split("/"))
             if os.path.isfile(path):
                 sr, x = voices._load_mono(path)
+                sos = signal.butter(4, F_LO, btype="highpass", fs=sr, output="sos")
+                x = signal.sosfiltfilt(sos, x)
                 save(f"{name}_real_{i}.wav", sr, x[int(t0 * sr):int(t1 * sr)])
         rng = np.random.default_rng(1)
         for i in range(1, count + 1):

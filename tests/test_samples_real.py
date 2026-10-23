@@ -45,11 +45,13 @@ class TestRealSamples(unittest.TestCase):
         clear_cache()
 
     def test_every_instrument(self):
+        tested = 0
         for inst in library.INSTRUMENTS.values():
             for art in inst.arts:
                 name = f"{inst.name}.{art}"
                 if not library.is_installed(name):
-                    self.skipTest(f"{name} není nainstalovaný")
+                    continue            # skupiny jdou instalovat zvlášť
+                tested += 1
                 with self.subTest(name=name):
                     s = library.instrument(name)
                     lo, hi = s.range
@@ -64,6 +66,8 @@ class TestRealSamples(unittest.TestCase):
                         got = 69 + 12 * math.log2(f0(seg) / 440.0)
                         self.assertLess(abs(got - pitch), 0.6,
                                         f"{name}: {got:.2f} vs {pitch}")
+        if not tested:
+            self.skipTest("žádné vzorky nejsou nainstalované")
 
 
 if __name__ == "__main__":

@@ -60,8 +60,58 @@ class TestFind(unittest.TestCase):
         found, rejects = breath.find_breaths(x, sr)
         self.assertEqual(len(found), 1)               # jen nádech před 3. tónem
         self.assertAlmostEqual(found[0].t0, self.truths[path][0][0], delta=0.05)
-        self.assertEqual(sum(rejects.values()), 2)
-        self.assertIn("dunění", rejects)
+        # cvakání je krátké, dunění 40 Hz detektor v pásmu DETECT_BAND nevidí
+        self.assertEqual(rejects, {"krátký": 1, "bez nádechu": 1})
+
+    def _rumble_room(self, seed=4):
+        """Jako VocalSet: tichý nádech (≈ −54 dBFS, ~34 dB pod zpěvem) pod hlukem
+        místnosti, který je skoro celý pod 150 Hz a širokopásmově o ~6 dB
+        silnější než nádech."""
+        from scipy.signal import butter, lfilter
+        from sample_fixture import breath_sound, sung_tone
+        rng = np.random.default_rng(seed)
+        b, a = butter(4, 100.0 / (SR / 2))
+        parts, truth, t = [np.zeros(int(0.4 * SR))], [], 0.4
+        for tone in (55, 57, 60):
+            br = breath_sound(SR, 0.4, 2000.0, int(rng.integers(1 << 30))) * 0.1
+            truth.append((t, t + br.size / SR))
+            parts += [br, np.zeros(int(0.06 * SR)), sung_tone(tone, SR, 1.0) * 0.5,
+                      np.zeros(int(0.4 * SR))]
+            t += br.size / SR + 0.06 + 1.0 + 0.4
+        clean = np.concatenate(parts)
+        rumble = lfilter(b, a, rng.standard_normal(clean.size))
+        rumble *= 0.004 / np.sqrt(np.mean(rumble ** 2))
+        return clean, clean + rumble + 1e-4 * rng.standard_normal(clean.size), truth
+
+    def test_finds_quiet_breath_under_rumble(self):
+        clean, x, truth = self._rumble_room()
+        found, rejects = breath.find_breaths(x, SR)
+        self.assertEqual(len(found), 3, rejects)
+        for b, (t0, t1) in zip(found, truth):
+            self.assertAlmostEqual(b.t0, t0, delta=0.06)
+            self.assertGreater(b.centroid, 1200.0)    # po odečtení dunění zbyde dech
+        # širokopásmově nádech nad hladinou nevystoupí (starý detektor)
+        with mock.patch.object(breath, "DETECT_BAND", (1.0, 0.45 * SR)):
+            naive, _ = breath.find_breaths(x, SR)
+        self.assertEqual(naive, [])
+
+    def test_describe_subtracts_room_noise(self):
+        clean, x, truth = self._rumble_room()
+        _, _, noise = breath._find(x, SR)
+        self.assertIsNotNone(noise)
+        k = breath.K
+        errs = []
+        for t0, t1 in truth:
+            a, b = int(t0 * SR), int(t1 * SR)
+            want = breath.describe(clean[a:b], SR)[k:].reshape(k, -1).mean(axis=0)
+            for v in (breath.describe(x[a:b], SR, noise), breath.describe(x[a:b], SR)):
+                d = v[k:].reshape(k, -1).mean(axis=0) - want
+                # pásma 150–500 Hz (tam dunění sahá) a ~500 Hz–9 kHz
+                errs.append([np.sqrt(np.mean(d[:6] ** 2)), np.sqrt(np.mean(d[6:24] ** 2))])
+        (low_fixed, mid_fixed), (low_raw, mid_raw) = np.array(errs).reshape(3, 2, 2).mean(axis=0)
+        self.assertLess(mid_fixed, 1.5)
+        self.assertLess(mid_fixed, mid_raw - 0.4)
+        self.assertLess(low_fixed, low_raw - 2.0)
 
     def test_check_rejects_tone(self):
         from sample_fixture import sung_tone
@@ -160,7 +210,7 @@ class TestModel(unittest.TestCase):
             data = json.load(f)
         self.assertEqual(sorted(data["models"]), ["female", "female2", "male", "male1"])
         self.assertEqual(data["stats"]["male1"]["breaths"], 16)    # 5 x 3 + distractor
-        self.assertEqual(data["stats"]["male1"]["rejected"], {"krátký": 1, "dunění": 1})
+        self.assertEqual(data["stats"]["male1"]["rejected"], {"krátký": 1, "bez nádechu": 1})
         self.assertEqual(data["models"]["male"]["count"], 19)       # male1 + male3
         self.assertIn("CC BY 4.0", data["source"])
 
@@ -246,7 +296,7 @@ class TestModel(unittest.TestCase):
         self.assertEqual(code, 0)
         text = out.getvalue()
         self.assertIn("female2", text)
-        self.assertIn("dunění", text)
+        self.assertIn("bez nádechu", text)
         self.assertIn("male3", text)                     # bez vlastního modelu
         self.assertIn("female2_real_1.wav", files)
         self.assertIn("female2_synth_3.wav", files)

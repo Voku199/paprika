@@ -1,83 +1,272 @@
+<p align="center">
+  <img src="docs/images/banner.png" alt="Paprika — hudba napsaná v Pythonu" width="100%">
+</p>
+
+<p align="center">
+  <a href="#poslechni-si">Poslechni si</a> ·
+  <a href="#instalace">Instalace</a> ·
+  <a href="#rychlý-start">Rychlý start</a> ·
+  <a href="#skutečné-nástroje">Nástroje</a> ·
+  <a href="#zpětná-vazba-bez-poslechu">Zpětná vazba</a> ·
+  <a href="#reference-api">API</a>
+</p>
+
+<p align="center">
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-b3261e">
+  <img alt="závislosti: numpy + scipy" src="https://img.shields.io/badge/závislosti-numpy%20%2B%20scipy-e8572a">
+  <img alt="testy: ~520" src="https://img.shields.io/badge/testy-~520-f6a04d">
+</p>
+
 # Paprika
 
-Konzolová Python knihovna, která umožňuje napsat a vyrenderovat písničku bez
-DAW a bez VST pluginů. Napíšeš soubor `songs/*.py`, spustíš
-`python -m paprika render` a dostaneš hotový `.wav` plus textovou analýzu,
-podle které poznáš, co se povedlo a co ne.
+**Skladba je Python soubor. Paprika z něj udělá WAV — s nahrávkami skutečného
+koncertního křídla, smyčců, dechů, žestí, tympánů a lidských hlasů.**
 
-Paprika není generátor hudby. Melodii, harmonii a strukturu skládáš ty (nebo
-AI). Paprika dává nástroje: hudební teorii, syntézu zvuku, efekty, mix
-a zpětnou vazbu.
+Žádná DAW, žádné VST pluginy, žádný generátor hudby. Melodii, harmonii
+a strukturu napíšeš ty (nebo AI) jako noty v kódu. Paprika dodá nástroje,
+hudební teorii, efekty, mix a hlavně **textovou zpětnou vazbu**: po každém
+renderu vypíše, co v mixu nesedí, a `check` za vteřinu najde špatný bas nebo
+nerozvedený tón — bez poslechu. Proto se s ní dobře skládá i z terminálu
+a s AI asistentem, který neslyší.
 
-**Engine v2** (stereo, modulace, glide, automatizace, sběrnice, konvoluční
-hall, sbor, bicí sady, cinematic SFX, 37 presetů) míří na temný cinematic /
-dark-pop soundtrack ve stylu Arcane. **Sampler** (v2.1) k tomu přidává
-skutečné nástroje z nahrávek — koncertní křídlo, smyčce, dechy, žestě,
-mallets — viz [Skutečné nástroje](#skutečné-nástroje-sampler).
+> **In English:** Paprika is a pure-Python music library. You write a song as
+> a Python module (notes, chords, harmony plan) and render it to WAV using real
+> sampled instruments (Salamander Grand Piano, VSCO 2 CE orchestra, VocalSet
+> choir and soloists) plus hand-written synthesis and effects. A text report and
+> a music-theory checker give feedback without listening — built for composing
+> together with an AI. Docs and messages are in Czech; the code reads fine either way.
+
+## Poslechni si
+
+Všech pět ukázek je v [`examples/`](examples/) — krátké, čitelné soubory,
+které jde rovnou upravovat. MP3 v [`docs/audio/`](docs/audio/) jsou
+vyrenderované přesně z nich, bez jakékoliv úpravy v jiném programu.
+
+| | Ukázka | Co je slyšet | Kód |
+|---|---|---|---|
+| 🎹 | [**Klavír**](docs/audio/01_klavir.mp3) | koncertní křídlo, levá ruka rozložené akordy, pedál | [`01_klavir.py`](examples/01_klavir.py) |
+| 🎻 | [**Smyčce**](docs/audio/02_smycce.mp3) | smyčcový orchestr, sólové housle legato, crescendo jedním tónem | [`02_smycce.py`](examples/02_smycce.py) |
+| 🎶 | [**Sbor a soprán**](docs/audio/03_sbor.mp3) | ženský a mužský sbor „óó“, sólový soprán, křídlo | [`03_sbor.py`](examples/03_sbor.py) |
+| 🎬 | [**Filmová scéna**](docs/audio/04_filmova_scena.mp3) | harfa, víření tympánů, téma v lesním rohu, sbor, celý orchestr | [`04_filmova_scena.py`](examples/04_filmova_scena.py) |
+| 🎼 | [**Kontrola teorie**](docs/audio/05_kontrola_teorie.mp3) | křídlo, cella, housle — a ukázka, jak `check` najde chybu | [`05_kontrola_teorie.py`](examples/05_kontrola_teorie.py) |
+
+<p align="center">
+  <img src="docs/images/scena.png" alt="Piano roll noty z kódu a spektrogram vyrenderovaného zvuku" width="100%">
+  <br><sub>Filmová scéna: nahoře noty tak, jak jsou napsané v kódu, dole spektrogram toho, co z nich Paprika vyrenderovala.</sub>
+</p>
+
+## Co umí
+
+- **Skutečné nástroje.** Vestavěný SFZ sampler přehrává nahrávky: křídlo
+  s 16 dynamickými vrstvami, smyčce (sekce i sóla, `sus trem pizz spic`),
+  dřevo, žestě, harfa, tympány, mallets a sbor i sólisté (soprán, alt, tenor,
+  bas). Velocity mění barvu tónu, ne jen hlasitost; legato, round robin,
+  pedál a plynulá dynamika jako modwheel ve filmových knihovnách.
+- **Noty jako text.** `"A4:2 D5:1 E5:1 | F5:4"` — takt oddělený `|`
+  a Paprika hlídá, že délky sedí. Akordy jménem (`Dm7`, `Bb/D`) nebo
+  arpeggio jedním voláním.
+- **Harmonický plán a kontrola teorie.** `s.harmony("i | VI | iv | V")`
+  a `python -m paprika check` porovná noty s plánem: bas, nevlastní tóny,
+  paralely, citlivý tón, kadence. Za vteřinu, bez renderu.
+- **Report po renderu.** Hlasitost, clipping, 7 frekvenčních pásem, stereo,
+  maskování mezi stopami, robotická dynamika, noty mimo rozsah nástroje.
+- **Mix jako v DAW.** Konvoluční hall, delay, EQ, kompresor, sidechain,
+  sběrnice, automatizace čehokoliv v čase, hotové master řetězy.
+- **MIDI export** do jakékoliv DAW, když budeš chtít skladbu dodělat jinde.
+- **Syntéza, když je potřeba.** 37 ručně napsaných presetů (pady, basy,
+  sbor přes formanty, 808…), bicí sady a cinematic efekty (riser, impact,
+  braam).
+- **Čistý Python.** Závislosti jen `numpy` a `scipy`. Oscilátory, obálky,
+  efekty, limiter, sampler i MIDI writer jsou napsané ručně a čitelné.
 
 ## Instalace
 
 ```bash
-pip install -r requirements.txt   # numpy + scipy
+git clone https://github.com/Voku199/paprika.git
+cd paprika
+pip install -r requirements.txt               # numpy + scipy
+
+python -m paprika samples install all         # nahrávky nástrojů, ~4.5 GB, jednou
 ```
 
-WAV zápis jede přes stdlib `wave`. Oscilátory, obálky, efekty i limiter jsou
-napsané ručně; scipy dává jen rychlé IIR filtry (`lfilter`) a FFT konvoluci.
-
-Volitelně, jen pro `analyze-ref` na ne-wav souborech (mp3, m4a, ...):
+Nahrávky se stáhnou **mimo repozitář** — do `%LOCALAPPDATA%\paprika\samples`
+na Windows, jinde do `~/.paprika/samples` (jinam přes proměnnou
+`PAPRIKA_SAMPLES`). Instalace pokračuje, kde skončila, a jde i po skupinách:
 
 ```bash
-pip install imageio-ffmpeg
+python -m paprika samples install piano       # jen křídlo, ~1 GB
+python -m paprika samples install strings voices
+python -m paprika samples                     # co je nainstalované
 ```
+
+Bez nahrávek fungují syntetizované nástroje, `check`, `show` i MIDI export.
+Samplovaný nástroj bez nahrávek skončí srozumitelnou chybou s příkazem na
+instalaci — Paprika nikdy potichu nepřepne na syntézu.
 
 ## Rychlý start
 
 ```python
-from paprika import Song, Reverb, Delay
+# examples/moje.py
+from paprika import Song, mastering
 
-s = Song(bpm=72, key="C", scale="major", bars=8)
+s = Song(bpm=66, key="D", scale="minor", bars=4)
+s.harmony("Dm | Bb | Gm | A")                       # plán: co má kde znít
 
-piano = s.track("epiano", vol=0.7)
-piano.fx(Reverb(room=0.75, mix=0.35), Delay(1/8, fb=0.25, mix=0.15))
-bass = s.track("subbass", vol=0.45)
-dr = s.drums(vol=0.7)
+piano = s.track("grand_piano", fx="default")         # křídlo + hall
+cello = s.track("celli", vol=0.6, pan=0.2, fx="default")
+voice = s.track("soprano.ooh", vol=0.6, fx="default")
+s.master.fx(*mastering("cinematic"))
 
-for bar, ch in enumerate(["Cmaj7", "Am7", "Fmaj7", "G7"] * 2):
-    piano.arp(ch, bar=bar, pattern="up", rate=1/8, octaves=2)
+for bar, ch in enumerate(["Dm", "Bb", "Gm", "A"]):
+    piano.chord(ch, bar=bar, dur=4, octave=3, vel=64)
+piano.pedal(bars=(0, 4), every=1)
 
-bass.notes("C2:4 | A1:4 | F1:4 | G1:4 | C2:4 | A1:4 | F1:4 | G1:4", bar=0)
-dr.pattern("k...s...k...s..h", bars=(4, 8))
-piano.humanize(timing=0.015, vel=0.12)
+cello.notes("D3:4 | Bb2:4 | G2:4 | A2:4", vel=80)
+voice.melody("A4:2 D5:1 E5:1 | F5:3 D5:1 | D5:2 Bb4:1 G4:1 | E5:2 C#5:2", vel=84)
 
-s.render("output/skica.wav")
+for t in (piano, cello, voice):
+    t.humanize(timing=0.012, vel=0.08, seed=1)
 ```
 
 ```bash
-python -m paprika render songs/romantic.py              # wav + report
-python -m paprika render songs/romantic.py --bars 0:8   # rychlý preview
-python -m paprika render songs/romantic.py --waveform   # + obálka mixu
-python -m paprika show   songs/romantic.py --bars 0:4   # jen ASCII, bez renderu
-python -m paprika check  songs/divadlo.py               # harmonie a teorie, bez renderu
-python -m paprika midi   songs/divadlo.py               # output/divadlo.mid
-python -m paprika play   output/romantic.wav            # systémový přehrávač
-python -m paprika presets                               # seznam nástrojů
-python -m paprika analyze-ref referencni.mp3             # tempo/key/akordy/dynamika
-python -m paprika compare ref.mp3 output/song.wav        # mix metriky proti referenci
+python -m paprika check  examples/moje.py           # teorie, za vteřinu
+python -m paprika render examples/moje.py --play    # output/moje.wav + report
 ```
 
-Skladba je normální Python modul. `render` ho naimportuje a najde na úrovni
-modulu právě jednu instanci `Song` — tu vyrenderuje. Volání `s.render(...)`
-přímo v souboru je volitelné; CLI funguje i bez něj a výstupní cestu odvodí
-z názvu skladby (`songs/romantic.py` → `output/romantic.wav`).
+Skladba je obyčejný Python modul. `render` ho naimportuje, najde v něm
+**právě jednu** instanci `Song` na úrovni modulu a vyrenderuje ji do
+`output/<jméno>.wav`. Všechno je v dobách (beatech), ne v sekundách —
+změna tempa je jeden parametr.
+
+Užitečné příkazy:
+
+```bash
+python -m paprika render  examples/04_filmova_scena.py --bars 6:10   # jen kus, rychle
+python -m paprika show    examples/01_klavir.py --bars 0:4           # ASCII piano roll
+python -m paprika midi    examples/04_filmova_scena.py               # output/*.mid
+python -m paprika presets                                            # syntetické nástroje
+python -m paprika compare reference.mp3 output/moje.wav              # mix proti referenci
+```
+
+## Skutečné nástroje
+
+| Skupina | Nástroje (`jméno.artikulace`, první je výchozí) |
+|---|---|
+| piano | `grand_piano` (Yamaha C5, 16 dynamik), `upright_piano` |
+| strings | `violins`, `violas`, `celli` (`sus trem pizz spic`), `violin_solo` (`sus trem pizz spic`), `contrabass` (`sus nv trem pizz spic`), `concert_harp` |
+| winds | `flute` (`sus nv exp stac`), `oboe` (`sus nv stac`), `clarinet` (`sus stac`), `bassoon` (`sus vib stac`) |
+| brass | `horn` (`sus stac mute`), `trumpet` (`sus vib stac mute`), `trombone` (`sus vib stac`), `tuba` (`sus stac`) |
+| mallets | `marimba`, `glockenspiel`, `xylophone` |
+| percussion | `timpani` (`hit roll`) — pět kotlů, úder dozní sám, víření drží smyčkou |
+| voices | `male_choir`, `female_choir`, `soprano`, `alto`, `tenor`, `basso` (`aah oh ooh eh`) |
+
+```python
+piano = s.track("grand_piano", fx="default")        # Hall
+piano.notes("(D2 A2 F3):4", bar=0).pedal(bars=(0, 8), every=1)
+violin = s.track("violin_solo", fx="default")       # sólo = mono = legato
+violin.melody("A4:2 >D5:1 E5:1 | F5:4", bar=8)
+s.track("celli.pizz").notes("D3:1 _:1 A2:1 _:1", bar=8)
+choir = s.track("female_choir.ooh", fx="default")   # katedrála
+choir.chord("Dm", bar=0, dur=8, octave=4)
+```
+
+- **Velocity mění barvu**, ne jen hlasitost (dynamické vrstvy nahrávky):
+  piano 16 vrstev, smyčce 2–3. Piš dynamiku 40–115, ne všude 100.
+  Pozor na hranici vrstev (u dvou vrstev 64): humanize kolem ní nahodile
+  přepíná nahrávky — piš buď zřetelně pod, nebo nad.
+- **Plynulá dynamika** `t.automate("dyn", [(takt, faktor), ...])` — jako
+  modwheel ve filmových knihovnách: faktor násobí velocity not v čase a
+  vrstvy nahrávky se prolnou, takže jeden dlouhý tón umí crescendo
+  i decrescendo. 1.0 = beze změny. Jen samplované stopy:
+
+  ```python
+  violins.note("D5", at=0, dur=16, vel=110)
+  violins.automate("dyn", [(0, 0.3), (3, 1.0), (4, 0.6)], "s")
+  ```
+
+- **Pedál** `t.pedal(bars=(od, do), every=1)` — nota, která skončí při
+  sešlápnutí, zní do uvolnění; `every` přešlápne se změnou harmonie.
+- **Legato** — sólové nástroje (`violin_solo`, `contrabass`, dechy, žestě,
+  sólové hlasy) jsou mono: navazující noty se prolnou bez nového nasazení.
+  Na polyfonní stopě legato zapne `>` před notou nebo `mono=True`.
+- **Round robin** — opakovaná nota vezme jinou nahrávku, nezní jako kulomet.
+- **Rozsah** — nota mimo rozsah nahrávek se natáhne a zní nepřirozeně;
+  report hlásí `mimo rozsah` s taktem a rozsahem nástroje.
+- **Vlastní knihovny**: `s.track(Sampler("cesta/k/nastroji.sfz", legato=True))`.
+
+**Zpěv** je z VocalSet. Sbory mají šest hlasů na klávesu rozestavěných do
+stran, bez vibrata; sólisté zpívají s vibratem a legato. Artikulace je
+samohláska, velocity přepíná piano / forte nahrávky. Instalace nahrávky
+rozřeže na jednotlivé tóny, oktávu každého ověří řadou harmonických a pod
+nejnižší zazpívaný tón dopočítá tři hlubší přes TD-PSOLA (výška klesne,
+samohláska zůstane). Rozsahy: `basso` E2–F4, `tenor` C3–C5, `alto` F#3–G5,
+`soprano` F#3–A5. Zpěv s textem Paprika neumí.
+
+## Zpětná vazba bez poslechu
+
+Paprika vznikla pro skládání s AI, která výsledek neslyší. Proto každý krok
+vrací text, podle kterého se dá pokračovat.
+
+**`check`** — harmonie a teorie, bez renderu, za vteřinu. Tady s chybou
+z [`05_kontrola_teorie.py`](examples/05_kontrola_teorie.py) (odkomentovaný
+řádek `CHYBA`):
+
+```
+$ python -m paprika check examples/05_kontrola_teorie.py
+PAPRIKA CHECK  05_kontrola_teorie.py
+skladba  66 BPM  A minor  8 taktů  3 stop  teorie: free
+
+HARMONIE A (0–3)      i | iv | VII | III
+HARMONIE B (4–7)      VI | iv | V7 | i
+AKORDY   i=Am  iv=Dm  VII=G  III=C  VI=F  V7=E7
+KADENCE  A (0–3): VII → III bez kadence · B (4–7): V7 → i autentická
+
+WARN  celli          bar 2   A#2 mimo A minor
+WARN  celli          bar 2   bas Bb2 nepatří do akordu G (VII) — plán chce v basu G (nebo jiný tón akordu)
+```
+
+**Report po renderu** — mix, pásma, stereo, hlasitost stop a co nesedí:
+
+```
+$ python -m paprika render examples/03_sbor.py
+PAPRIKA  03_sbor.wav
+render   0:38  44100 Hz  stereo  4 stop  81 not  [10.5s]
+
+MIX      peak -10.7 dBFS   rms -26.1 dB   no clipping
+BANDS    sub 0% bass 15% lowmid 24% mid 60% himid 1% pres 0% air 0%   [ok]
+STEREO   šířka 18 %   korelace 0.64   [ok]
+TRACKS   female_choir_ooh -34.6 dB | male_choir_ooh -32.9 dB | soprano_aah -29.2 dB | grand_piano -35.0 dB
+
+WARN  female_choir_ooh + male_choir_ooh maskování 250-4000 Hz, bars 0-7
+```
+
+**`show`** — ASCII piano roll, rychlá kontrola struktury bez renderu:
+
+```
+$ python -m paprika show examples/01_klavir.py --bars 0:4
+       |0       |1       |2       |3       |
+chords |Am      |F       |C       |G       |
+leva   |AEACECAE|FCFACAFC|CGCEGECG|GDGBDBGD|
+prava  |E--DC-B-|A---C-F-|E--DC-E-|D-----B-|
+```
+
+Onset noty je písmeno tónu (malé písmeno = křížek), držení `-`, ticho `.`.
+
+Doporučený postup: **harmonie → party → `check` → `render --bars` na kus →
+report → oprava → celý render.**
+
+---
+
+# Reference API
 
 ## Notace not
 
 ```
-C#4:1.5        nota, oktáva, dvojtečka, délka v beatech
+C#4:1.5        nota, oktáva, dvojtečka, délka v dobách
 (C4 E4 G4):2   akord — celý naráz
 _:2            pauza
 ~:1            prodlouží předchozí notu
->G1:1          glide — nota doklouže z výšky předchozí noty (808, slide)
+>G1:1          glide / legato — nota naváže na předchozí
 C4:1@110       volitelná velocity
 |              oddělovač taktů a zároveň kontrola délek
 ```
@@ -90,185 +279,34 @@ podle zvuku.
 
 | Metoda | Co dělá |
 |---|---|
-| `.note(pitch, at, dur, vel)` | jedna nota, `at` v beatech od začátku skladby |
+| `.note(pitch, at, dur, vel)` | jedna nota, `at` v dobách od začátku skladby |
 | `.notes(str, bar=)` | řetězec not od daného taktu |
 | `.melody(str, bar=)` | totéž, čitelnější jméno pro melodické linky |
-| `.chord(name, bar, dur, inv=0, oct=0)` | akord podle jména nebo seznamu pitchů |
+| `.chord(name, bar, dur, inv=0, octave=4)` | akord podle jména nebo seznamu výšek |
 | `.arp(name, bar, pattern, rate, octaves)` | arpeggio; `up`/`down`/`updown`/`downup`/`random` |
+| `.pedal(bars=(od, do), every=)` | sustain pedál |
 | `.fx(*efekty)` | připojí efektový řetěz |
-| `.humanize(timing, vel)` | rozhýbe časování (v beatech) a dynamiku (relativně) |
+| `.humanize(timing, vel, seed)` | rozhýbe časování (v dobách) a dynamiku (relativně) |
 | `.clear(bars=)` | smaže rozsah taktů |
 | `.transpose(semitones)` | posune celou stopu |
 | `.repeat(bars, times)` | zkopíruje rozsah taktů dál po timeline |
-| `.automate(cíl, [(takt, hodnota)], curve)` | změna v čase: `vol`, `pan`, `<efekt>.<param>`; křivky `lin`, `exp`, `s`, `step` |
+| `.automate(cíl, [(takt, hodnota)], curve)` | změna v čase: `vol`, `pan`, `dyn`, `<efekt>.<param>`; křivky `lin`, `exp`, `s`, `step` |
 | `.to(bus)` | pošle stopu do sběrnice |
 
-`s.track(nástroj, vol, pan, mono=, glide=, fx=)` — `mono=True` slije
-navazující noty do jednoho hlasu (legato), `glide` je sklouznutí v beatech;
-opakovaná nota stejné výšky se znovu udeří. `fx="default"` připojí
-doporučený řetěz presetu (808 → saturace, sbor → katedrála).
+`s.track(nástroj, vol, pan, mono=, glide=, fx=)` — `fx="default"` připojí
+doporučený řetěz nástroje (křídlo → hall, sbor → katedrála). Metody vrací
+`self`, takže jdou řetězit.
 
-`s.drums(kit="trap")` vrací stopu s `.pattern(str, bars=(od, do), rate=1/16,
-swing=0)` a `.roll("h", bar, beat, beats, rate=1/32, vel=(60, 110))`.
-
-`s.sfx()` vrací stopu cinematic efektů: `.riser(to_bar, bars, kind)` skončí
-přesně na začátku taktu, `.impact(bar)`, `.braam(bar, "D2", bars)`,
-`.subdrop(bar)`, `.reverse_swell(to_bar, beats)`, `.whoosh(bar, beats)`.
-
-`s.bus("drums")` je sběrnice s vlastním fx řetězem a automatizací;
+`s.bus("strings")` je sběrnice s vlastním fx řetězem a automatizací;
 `s.master` je poslední řetěz před limiterem.
 
 ```python
-bus = s.bus("drums").fx(Compressor(-16, 4))
-kick.to(bus); hats.to(bus)
-pad.fx(Sidechain("drums", amount=0.4))                  # pumpuje od busu
-lead.fx(LowPass(300, res=0.5)).automate("lowpass.cutoff",
-                                        [(8, 300), (16, 8000)], "exp")
-s.master.automate("vol", [(0, 1), (15.875, 0), (16, 1)], "step")  # díra před dropem
+bus = s.bus("orchestr").fx(Compressor(-16, 2))
+violins.to(bus); celli.to(bus)
+choir.fx(Sidechain("timpani", amount=0.3))            # uhne úderům tympánů
+violins.automate("vol", [(0, 0.0), (8, 0.6)], "s")     # pomalý nástup
+s.master.automate("vol", [(0, 1), (15.875, 0), (16, 1)], "step")  # díra ticha
 ```
-
-## Skutečné nástroje (sampler)
-
-Syntéza neumí znít jako piano v divadle nebo housle. Na to má Paprika
-sampler, který přehrává nahrávky skutečných nástrojů (SFZ + WAV, žádná
-závislost navíc). Vzorky se stáhnou jednou, mimo repo:
-
-```bash
-python -m paprika samples                  # stav, cesta, nástroje a artikulace
-python -m paprika samples install all      # ~4.5 GB; nebo piano|strings|winds|brass|mallets|percussion|voices
-```
-
-Vzorky leží v `%LOCALAPPDATA%\paprika\samples` (jinde `~/.paprika/samples`),
-jinam přes proměnnou `PAPRIKA_SAMPLES`. Instalace pokračuje, kde skončila.
-
-| Skupina | Nástroje (`jméno.artikulace`, první je výchozí) |
-|---|---|
-| piano | `grand_piano` (Yamaha C5, 16 dynamik), `upright_piano` |
-| strings | `violins`, `violas`, `celli` (`sus trem pizz spic`), `violin_solo` (`sus trem pizz spic`), `contrabass` (`sus nv trem pizz spic`), `concert_harp` |
-| winds | `flute` (`sus nv exp stac`), `oboe` (`sus nv stac`), `clarinet` (`sus stac`), `bassoon` (`sus vib stac`) |
-| brass | `horn` (`sus stac mute`), `trumpet` (`sus vib stac mute`), `trombone` (`sus vib stac`), `tuba` (`sus stac`) |
-| mallets | `marimba`, `glockenspiel`, `xylophone` |
-| percussion | `timpani` (`hit roll`) — pět kotlů, úder dozní sám, víření drží smyčkou |
-| voices | `male_choir`, `basso`, `tenor` (`aah oh ooh eh`) |
-
-```python
-piano = s.track("grand_piano", fx="default")        # Hall
-piano.notes("(D2 A2 F3):4", bar=0).pedal(bars=(0, 8), every=1)
-violin = s.track("violin_solo", fx="default")       # sólo = mono = legato
-violin.melody("A4:2 >D5:1 E5:1 | F5:4", bar=8)
-s.track("celli.pizz").notes("D3:1 _:1 A2:1 _:1", bar=8)
-```
-
-- **Velocity mění barvu**, ne jen hlasitost (dynamické vrstvy nahrávky):
-  piano 16 vrstev, smyčce 2–3. Piš dynamiku 40–115, ne všude 100.
-  Pozor na hranici vrstev (u dvou vrstev 64): humanize kolem ní nahodile
-  přepíná nahrávky — piš buď zřetelně pod, nebo nad.
-- **Plynulá dynamika** `t.automate("dyn", [(takt, faktor), ...])` — jako
-  modwheel ve filmových knihovnách: faktor násobí velocity not v čase a
-  vrstvy nahrávky se prolnou (±12 velocity kolem hranice), takže jeden
-  dlouhý tón umí crescendo i decrescendo. 1.0 = beze změny. Jen
-  samplované stopy::
-
-      violins.note("D5", at=0, dur=16, vel=110)
-      violins.automate("dyn", [(0, 0.3), (3, 1.0), (4, 0.6)], "s")
-
-- **Pedál** `t.pedal(bars=(od, do), every=1)` — nota, která skončí při
-  sešlápnutí, zní do uvolnění; `every` přešlápne se změnou harmonie.
-  Funguje i na syntetizovaných stopách.
-- **Legato** — sólové nástroje (`violin_solo`, `contrabass`, dechy, žestě)
-  jsou mono: navazující noty se prolnou bez nového nasazení smyčce.
-  Na polyfonní stopě legato zapne `>` před notou nebo `mono=True`.
-- **Round robin** — opakovaná nota vezme jinou nahrávku, nezní jako kulomet.
-- **Rozsah** — nota mimo rozsah nahrávek se natáhne a zní nepřirozeně;
-  report hlásí `mimo rozsah` s taktem a rozsahem nástroje.
-- **Vlastní knihovny**: `s.track(Sampler("cesta/k/nastroji.sfz", legato=True))`.
-- Ukázka: `songs/divadlo.py` (křídlo + smyčce + harfa + roh).
-
-**Zpěv (skupina `voices`)** je z VocalSet: mužský sbor (šest zpěváků na
-klávesu, rozestavění do stran, bez vibrata), `basso` (nejhlubší hlas sady,
-operní vibrato, E2–F4) a `tenor` (C3–C5); ženský sbor `female_choir` (šest
-zpěvaček ze devíti na klávesu), `soprano` (F#3–A5, zpívá nejvýš) a `alto`
-(F#3–G5, nejtmavší barva). Artikulace je samohláska, velocity přepíná
-piano / forte nahrávky. Instalace nahrávky rozřeže na jednotlivé tóny,
-oktávu každého ověří řadou harmonických a pod nejnižší zazpívaný tón
-dopočítá tři hlubší přes TD-PSOLA (výška klesne, samohláska zůstane),
-zpěvačkám i dva nad nejvyšší dlouhý tón (soprán nad A5 už ladí nepřesně):
-
-```python
-choir = s.track("male_choir.ooh", fx="default")       # katedrála
-choir.chord(["D2", "A2", "F3"], bar=0, dur=8)
-basso = s.track("basso.aah", fx="default")            # sólo = mono = legato
-basso.melody("D3:2 >A2:2 | F3:3 E3:1", bar=4)
-```
-
-**Licence:** VocalSet je **CC BY 4.0** — ve hře uveď „Vocals from VocalSet
-by J. Wilkins, P. Seetharaman, A. Wahl and B. Pardo, licensed under CC BY 4.0“.
-VSCO 2 CE je CC0. Salamander Grand Piano je **CC-BY 3.0** —
-ve hře uveď v titulcích „Salamander Grand Piano V3 by Alexander Holm,
-licensed under CC-BY 3.0“. Znění je i v `CREDITS.txt` ve složce vzorků.
-
-## Nástroje
-
-Presety podle tagů (`python -m paprika presets --tag choir`):
-
-| Tag | Presety |
-|---|---|
-| classic | `epiano`, `warmpad`, `subbass`, `pluck`, `lead`, `strings`, `bell`, `organ` |
-| orchestral | `strings_ens`, `strings_short`, `pizz`, `cello_solo`, `brass_section`, `horn_swell`, `harp`, `timpani_tone` |
-| choir | `choir_ooh`, `choir_aah`, `choir_mm`, `vox_chop` |
-| keys | `felt_piano`, `toy_piano`, `music_box`, `celesta` |
-| darkpop | `808`, `reese`, `dark_pluck`, `detuned_lead` |
-| electronic | `supersaw`, `acid`, `string_stab`, `pwm_pad`, `air_pad` |
-| lofi | `lofi_keys`, `glass_pad`, `shimmer_pad`, `round_bass` |
-
-Bicí: `k` kick, `s` snare, `h` hi-hat, `o` open hat, `c` clap, `t` tom,
-`r` ride, `x` rim, `b` boom (taiko), `y` shaker, `p` perc. Jak zní, určuje
-sada: `classic`, `trap`, `cinematic`, `breakbeat`, `industrial`, `lofi`.
-V pattern stringu je jeden znak jeden krok (výchozí šestnáctina), tečka nebo
-podtržítko je pauza a **velké písmeno znamená akcent** —
-`"k...s...k...s..K"` má poslední kopák hlasitější. Víc řádků v jednom
-stringu se navrství na sebe.
-
-Vlastní patch:
-
-```python
-from paprika import Patch, Sine, ADSR, LP
-
-moje = s.track(Patch(
-    osc=[Sine(1.0), Sine(2.01, amp=0.35), Sine(7.0, amp=0.08)],
-    adsr=ADSR(0.004, 0.35, 0.4, 1.4),
-    filter=LP(2200, env=0.6)))
-```
-
-Oscilátory: `Sine`, `Saw`, `Square`, `Tri`, `Noise(color=white|pink|brown)`,
-`FM`, `SuperSaw(voices, detune, spread)` (unison do stran), `Pulse(width,
-pwm=LFO)`, `Pluck(decay, bright)` (Karplus-Strong struna), `Additive(partials,
-inharm)` (piano, music box, zvony). První argument je poměr k základní
-frekvenci noty, takže `Sine(2.01)` je mírně rozladěná oktáva.
-
-Filtry v patchi: `LP`/`HP(cutoff, env, poles, res, lfo)` (rezonance, LFO na
-cutoff), `BP`, `Formant(vowel, voice, morph)` — samohlásky a–u pro sbor;
-`filter` smí být seznam.
-
-Modulace v patchi: `vibrato=LFO(5, 0.1, delay=0.3)` (půltóny, nástup se
-zpožděním), `tremolo=LFO`, `pitch_env=PitchEnv(semi, time)`,
-`vel_to_cutoff` (silnější úhoz = jasnější), `rr` (round-robin varianty),
-`drift` (analogové kolísání v centech), `ensemble=Ensemble(voices, detune,
-spread, smear)` — sekce místo sólisty: kopie hlasu rozladěné o ±`detune`
-centů, s nástupem rozmazaným o 0..`smear` s a rozprostřené do stran.
-
-`ADSR(a, d, s, r, curve="exp")` — decay a release klesají exponenciálně jako
-u akustického nástroje; `curve="lin"` jsou přímky z v1 (zní „trackerově“).
-
-Efekty: `Reverb(room, mix, damp, width, algo="conv")` (konvoluční dozvuk;
-`algo="freeverb"` = kovovější Freeverb z v1),
-`Hall(preset, size, mix)` (konvoluce: room / plate / hall / cathedral),
-`Delay(time, fb, mix, ping_pong, tone)`, `LowPass`/`HighPass(cutoff, poles,
-res)`, `Filter(mode, cutoff, res)`, `EQ(low, mid, high)`, `Saturate(drive)`,
-`Compressor(threshold, ratio, attack, release, makeup)`, `Gate(pattern,
-rate, depth)` (trance gate), `Chorus`, `Width(amount)`, `BitCrush(bits,
-downsample)`, `Tape(wow, flutter, drive, hiss)`, `Sidechain(zdroj, amount)`
-— zdroj je stopa nebo bus. Každý efekt bere `name=` pro automatizaci.
 
 ## Harmonický plán a kontrola teorie
 
@@ -283,98 +321,44 @@ s.harmony("i | VI | iv | V7/V", bar=4)               # římské číslice vůč
 s.section("A", bars=(0, 8)).section("B", bars=(8, 16))
 ```
 
-```bash
-python -m paprika check songs/divadlo.py              # za vteřinu, bez renderu
-python -m paprika check songs/divadlo.py --bars 8:16
-```
-
 - `|` odděluje takty a hlídá délky (`HarmonyError` s číslem taktu), `Gm:2`
-  je akord na dva beaty, akordy bez délky si dělí takt rovným dílem
-  (`Gm A` = po půl taktu), bez `|` je každý akord jeden takt, `_` = bez
-  akordu.
-- Jméno akordu je základ + kvalita z `CHORDS`, lomítko je bas: `Dm/F`.
+  je akord na dvě doby, akordy bez délky si dělí takt rovným dílem
+  (`Gm A` = po půl taktu), `_` = bez akordu.
+- Jméno akordu je základ + kvalita, lomítko je bas: `Dm/F`.
 - Římská číslice: velká = dur, malá = moll, `o` zmenšený, `ø7` malý
   zmenšený septakord, `+` zvětšený, `7` diatonická septima (`I7` = Cmaj7,
-  `V7` = G7), `6`/`64`/`65`/`43`/`42` obraty, `add6` přidaná sexta (u jména
-  je to `C6`), lomítko = vedlejší akord (`V/V`, `V7/iv`, `viio7/V`),
-  `b`/`#` posune základ (`bVII`). V mollu se stupně počítají od
-  přirozeného mollu (`VI` = Bb v d moll), `V` je durová dominanta a `viio`
-  stojí na citlivém tónu.
+  `V7` = G7), `6`/`64`/`65`/`43`/`42` obraty, `add6` přidaná sexta,
+  lomítko = vedlejší akord (`V/V`, `V7/iv`, `viio7/V`), `b`/`#` posune
+  základ (`bVII`). V mollu se stupně počítají od přirozeného mollu (`VI` =
+  Bb v d moll), `V` je durová dominanta a `viio` stojí na citlivém tónu.
 - Další `harmony()` přes stejné takty plán přepíše — jde psát po sekcích.
-- `show` kreslí nad stopami řádek `chords`.
 
-```
-PAPRIKA CHECK  divadlo.py
-skladba  70 BPM  D minor  32 taktů  9 stop  teorie: free
-
-HARMONIE A (0–7)      i | VI | iv | V | i | III | iv V | i
-AKORDY   i=Dm  VI=Bb  iv=Gm  V=A  III=F
-KADENCE  A (0–7): V → i autentická · ...
-
-INFO  celli          bar 22   paralelní kvinty s horn: F2/C4 → G2/D4
-```
-
-`Song(theory=...)` volí přísnost. `free` (výchozí) je pro cinematic a pop:
-kontroluje samostatné linky (jednohlasé stopy), oktávová zdvojení,
-arpeggia, ostinata a pady bere jako záměr. `strict` je učebnice (chorál,
-kvartet): rozdělí vícehlasé stopy na hlasy a hlásí všechno jako WARN.
-`off` teorii vypne.
+`Song(theory=...)` volí přísnost. `free` (výchozí) je pro filmovou a pop
+hudbu: kontroluje samostatné linky, oktávová zdvojení, arpeggia, ostinata
+a pady bere jako záměr. `strict` je učebnice (chorál, kvartet): rozdělí
+vícehlasé stopy na hlasy a hlásí všechno jako WARN. `off` teorii vypne.
 
 | Pravidlo | free | strict |
 |---|---|---|
 | bas na začátku akordu nepatří do akordu (prodleva se nehlásí) | WARN | WARN |
 | v úseku akordu nezní jeho základ nebo tercie | INFO | WARN |
-| nota linky na těžké době mimo akord, nerozvede se krokem (průtah a appoggiatura projdou) | WARN, když je mimo stupnici, jinak INFO | WARN |
-| paralelní kvinty a oktávy mezi linkami | INFO, jen izolované; 3+ po sobě a figurace = záměr | WARN |
+| nota linky na těžké době mimo akord, nerozvede se krokem | WARN, když je mimo stupnici, jinak INFO | WARN |
+| paralelní kvinty a oktávy mezi linkami | INFO, jen izolované | WARN |
 | citlivý tón v nejvyšším hlase ve V → I nejde na tóniku | INFO | WARN |
 | melodie: skok ≥ malá sexta bez návratu, tritón | INFO | WARN |
-| tercie pod G2 držená aspoň beat | WARN | WARN |
+| tercie pod G2 držená aspoň dobu | WARN | WARN |
 | sousední horní hlasy dál než oktávu, křížení linek | — | WARN |
 
 Nota, která je v akordu plánu, není „mimo stupnici“ — C# v dominantě A
 v d moll je v pořádku i bez `chromatic=True`.
 
-## MIDI export
-
-```bash
-python -m paprika midi songs/divadlo.py               # vedle WAV: output/divadlo.mid
-python -m paprika midi songs/x.py -o hotove/x.mid
-```
-
-```python
-from paprika import export_midi, read_midi
-notes = export_midi(s, "output/x.mid")   # vrátí, co se do MIDI nevešlo
-mid = read_midi("output/x.mid")          # stopy, noty v tickách, události
-```
-
-Standard MIDI File formát 1, 480 ticků na beat. Stopa 0 nese tempo, takt,
-předznamenání, sekce jako markery a akordy plánu jako text (`"Dm (i)"`).
-Každá stopa je vlastní MIDI stopa se jménem a GM programem (piano, smyčce,
-sbor, ...), sustain pedál jde jako CC64, bicí na kanál 10 (kick 36, snare
-38, hat 42, ...). Noty mají humanize časování i velocity. SFX stopy (zvuky,
-ne noty) a automatizace se nevyexportují — export to vypíše.
-
-## Zpětná vazba
-
-Po renderu se vypíše report:
-
-```
-PAPRIKA  romantic.wav
-render   1:50  44100 Hz  stereo  4 stop  396 not  [11.8s]
-
-MIX      peak -0.6 dBFS   rms -20.4 dB   no clipping
-BANDS    low 51%  mid 48%  high 1%      [zkontroluj]
-TRACKS   piano -20.5 dB | pads -28.7 dB | bass -21.0 dB | drums -33.0 dB
-
-WARN  piano + pads   maskování 250-4000 Hz, bars 1-3, 5-7
-```
-
-Pravidla warningů:
+## Pravidla reportu
 
 | Pravidlo | Podmínka |
 |---|---|
-| nota mimo stupnici | pitch není ve `Song.scale` ani v akordu plánu a stopa nemá `chromatic=True` |
-| clipping | jakýkoliv sample před limiterem přesáhne 1.0 |
+| nota mimo stupnici | výška není ve `Song.scale` ani v akordu plánu a stopa nemá `chromatic=True` |
+| mimo rozsah | nota leží mimo nahrávky samplovaného nástroje |
+| clipping | jakýkoliv vzorek před limiterem přesáhne 1.0 |
 | špatná hlasitost | peak nad −0.3 dBFS nebo RMS pod −30 dB |
 | frekvenční maskování | dvě stopy mají obě přes 40 % energie ve stejném pásmu a čase |
 | robotická dynamika | směrodatná odchylka velocity ve stopě je nula |
@@ -382,153 +366,156 @@ Pravidla warningů:
 | díra v aranži | stopa mlčí 4+ takty uprostřed skladby |
 | mono kompatibilita | korelace L/R stopy klesne pod 0 — v mono se vyruší |
 | statický zvuk | melodická stopa přes 16+ taktů bez modulace, automatizace i humanize |
-| teorie | pravidla z [Harmonický plán a kontrola teorie](#harmonický-plán-a-kontrola-teorie) |
-
-| přetížený sub | víc než 15 % výkonu pod 60 Hz (reference 3–7 %) |
+| přetížený sub | víc než 15 % výkonu pod 60 Hz |
 | úzké stereo | šířka mixu pod 8 % u skladby delší než 8 taktů |
 | tenké středy | méně než 15 % výkonu v 250 Hz–4 kHz |
 
-Maskování vypisuje jen čtyři nejdelší překryvy a tiché takty (pod -80 dBFS)
-ignoruje. `BANDS` ukazuje sedm pásem (sub, bass, lowmid, mid, himid, pres,
-air), `STEREO` šířku mixu a korelaci kanálů — obojí s `[ok]` proti
-cinematic cíli (sub ≤ 12 %, středy ≥ 20 %, šířka ≥ 10 %).
-
-`compare` vypíše tytéž metriky pro render i referenční nahrávku vedle sebe
-a rozdíl proti prvnímu souboru:
+`compare` vypíše stejné metriky pro render a referenční nahrávku vedle sebe:
 
 ```
-$ python -m paprika compare songs_mp3/requiem.mp3 output/v2_showcase.wav
+$ python -m paprika compare reference.mp3 output/moje.wav
 soubor                          sub   bass lowmid    mid  himid ...  šířka
-requiem.mp3                    3.5%  41.8%  22.1%  27.9%   4.5% ...  29.4%
-v2_showcase.wav               11.0%  26.9%  36.2%  24.1%   0.9% ...  19.2%
+reference.mp3                  3.5%  41.8%  22.1%  27.9%   4.5% ...  29.4%
+moje.wav                      11.0%  26.9%  36.2%  24.1%   0.9% ...  19.2%
   rozdíl proti prvnímu        +7.5  -14.9  +14.1   -3.8   -3.6
 ```
 
-## Jak se vyhnout „čipovému“ zvuku
+`analyze-ref` z cizí nahrávky odhadne tempo, tóninu, akordy po taktech
+a dynamiku (čisté numpy, žádné ML; pro mp3 je potřeba
+`pip install imageio-ffmpeg`).
 
-Retro / 16bitový dojem dělá strojová přesnost a úzký, basově přetížený mix.
-Co pomáhá (měřeno proti referencím):
+## MIDI export
 
-- **Nahrané nástroje** — piano, smyčce, dechy a žestě ze sampleru
-  (`grand_piano`, `violins`, ...) místo syntetických presetů; syntéza ať
-  dělá pady, basy a elektroniku.
-- **Sekce místo sólisty** — smyčce, sbor, žesťe, pady přes `Ensemble`
-  (presety `strings_ens`, `choir_*`, `brass_section`, `warmpad`, … ho mají).
-- **Žádná rychlá arpeggia** 1/16 na pluck/square — to je podpis čipové
-  hudby. Rozložené akordy ve čtvrtích/osminách, legato linky, držené akordy.
-- **HighPass na všem kromě basů a kopáku** (80–180 Hz) — sub nechat 808
-  a kopáku, a i ty tak, aby sub zůstal pod ~12 %.
-- **Prostor** — `Hall`/`Reverb` na melodické stopy, pan ±0.1–0.3.
-- **Mastering** — `s.master.fx(*mastering("cinematic"))` (také `darkpop`,
-  `lofi`): HP 30 Hz, jemné EQ, glue kompresor, lehká páska.
-- **Humanize** na každé stopě, vibrato se zpožděním na sólech.
-- Ověř: `python -m paprika compare reference.mp3 output/song.wav`.
-
-ASCII náhled (`show`) kreslí timeline bez renderu — rychlá kontrola struktury:
-
-```
-$ python -m paprika show songs/romantic.py --bars 12:16
-       |12      |13      |14      |15      |
-piano  |E-G-C---|B-G-E---|D-------|C-------|
-pads   |C-------|A-------|F-------|G-------|
-bass   |C-------|A-------|F-------|G-------|
-drums  |k.h.s.h.|k.h.s.hh|k.h.s.hh|k.h.s.h.|
+```bash
+python -m paprika midi examples/04_filmova_scena.py      # output/04_filmova_scena.mid
+python -m paprika midi songs/x.py -o hotove/x.mid
 ```
 
-Onset noty je písmeno tónu (malé písmeno = křížek), držení `-`, ticho `.`.
-Bicí kreslí svůj znak, akcent velkým písmenem. `--res 16` přepne na
-šestnáctiny.
-
-## Referenční analýza
-
-`analyze-ref` čte externí nahrávku (mp3/wav — cokoliv, co zvládne ffmpeg) a
-vypíše hrubý odhad tempa, tóniny, akordů po taktech a dynamiky, aby bylo
-podle čeho ručně napsat vlastní skladbu ve stejné náladě:
-
-```
-$ python -m paprika analyze-ref kyomei.mp3
-REFERENCE  kyomei.mp3
-audio    3:35  44100 Hz  mono
-
-TEMPO    ~92 BPM  (jistota: vysoká)
-KEY      D minor  (korelace 0.87, jistota: vysoká)
-
-DYNAMIKA  (energie po taktech, ~2.6s/takt)
-  ████████████████████████████████████████████████████████████▇▁
-
-AKORDY   (hrubý odhad z chroma vektorů, po taktech)
-  bar   1-8   Fm    F     F     F     Dm    Dm    Dm    Dm
-  ...
+```python
+from paprika import export_midi, read_midi
+skipped = export_midi(s, "output/x.mid")   # vrátí, co se do MIDI nevešlo
+mid = read_midi("output/x.mid")
 ```
 
-Detekce je čistě numpy (STFT, spectral-flux tempo, Krumhansl-Schmuckler
-key-fit, chroma template matching na akordy) — žádné ML, žádná separace
-nástrojů. Na polyfonním mixu (klavír+smyčce+bicí najednou) jsou akordy jen
-orientační, hlavně v hlasitých pasážích. Note-by-note transkripce se
-nedělá — to spolehlivě nejde bez ML.
+Standard MIDI File formát 1, 480 ticků na dobu. Stopa 0 nese tempo, takt,
+předznamenání, sekce jako markery a akordy plánu jako text. Každá stopa
+dostane jméno a GM program (piano, smyčce, sbor…), pedál jde jako CC64, bicí
+na kanál 10. SFX a automatizace se nevyexportují — export to vypíše.
 
-`.wav` čte stdlib `wave` bez závislostí navíc. Ostatní formáty (mp3, m4a, ...)
-potřebují `pip install imageio-ffmpeg` (lazy import, jen když se použije).
+## Efekty a mix
+
+`Hall(preset, size, mix)` (konvoluce: `room` / `plate` / `hall` /
+`cathedral`), `Reverb(room, mix, damp, width)`, `Delay(time, fb, mix,
+ping_pong, tone)`, `LowPass`/`HighPass(cutoff, poles, res)`,
+`Filter(mode, cutoff, res)`, `EQ(low, mid, high)`, `Saturate(drive)`,
+`Compressor(threshold, ratio, attack, release, makeup)`, `Gate(pattern,
+rate, depth)`, `Chorus`, `Width(amount)`, `BitCrush`, `Tape(wow, flutter,
+drive, hiss)`, `Sidechain(zdroj, amount)` — zdroj je stopa nebo sběrnice.
+Každý efekt bere `name=` pro automatizaci (`"lowpass.cutoff"`).
+
+`s.master.fx(*mastering("cinematic"))` — hotový master řetěz (také
+`darkpop`, `lofi`): HP 30 Hz, jemné EQ, glue kompresor, lehká páska.
+
+## Syntéza
+
+Kromě nahrávek má Paprika 37 ručně napsaných syntetických nástrojů — hodí se
+na pady, basy, atmosféru a elektroniku pod orchestrem
+(`python -m paprika presets --tag choir`):
+
+| Tag | Presety |
+|---|---|
+| orchestral | `strings_ens`, `strings_short`, `pizz`, `cello_solo`, `brass_section`, `horn_swell`, `harp`, `timpani_tone` |
+| choir | `choir_ooh`, `choir_aah`, `choir_mm`, `vox_chop` |
+| keys | `felt_piano`, `toy_piano`, `music_box`, `celesta` |
+| classic | `epiano`, `warmpad`, `subbass`, `pluck`, `lead`, `strings`, `bell`, `organ` |
+| darkpop | `808`, `reese`, `dark_pluck`, `detuned_lead` |
+| electronic | `supersaw`, `acid`, `string_stab`, `pwm_pad`, `air_pad` |
+| lofi | `lofi_keys`, `glass_pad`, `shimmer_pad`, `round_bass` |
+
+Vlastní nástroj z oscilátorů, obálky a filtru:
+
+```python
+from paprika import ADSR, LP, LFO, Patch, Sine
+
+moje = s.track(Patch(
+    osc=[Sine(1.0), Sine(2.01, amp=0.35), Sine(7.0, amp=0.08)],
+    adsr=ADSR(0.004, 0.35, 0.4, 1.4),
+    filter=LP(2200, env=0.6),
+    vibrato=LFO(5, 0.1, delay=0.3)))
+```
+
+Oscilátory `Sine`, `Saw`, `Square`, `Tri`, `Noise`, `FM`, `SuperSaw`,
+`Pulse`, `Pluck` (Karplus-Strong), `Additive`; filtry `LP`, `HP`, `BP`,
+`Formant` (samohlásky pro sbor); modulace `LFO`, `PitchEnv`, `Ensemble`
+(sekce místo sólisty).
+
+Bicí: `s.drums(kit="cinematic")` s patterny jako `"b.......b...b.b."`
+(`k` kick, `s` snare, `h` hi-hat, `b` taiko, …; velké písmeno = akcent).
+Filmové efekty: `s.sfx()` s `.riser(to_bar, bars)`, `.impact(bar)`,
+`.braam(bar, "D2")`, `.subdrop(bar)`, `.reverse_swell(to_bar)`,
+`.whoosh(bar)`.
 
 ## Struktura
 
 ```
 paprika/
-  __init__.py     veřejné API
-  song.py         Song, Track, DrumTrack, SfxTrack, Bus, Clip, timeline
-  note.py         Note a parsing notačních řetězců (včetně glide `>`)
-  theory.py       stupnice, akordy, obraty, arpeggia
-  harmony.py      harmonický plán: jména akordů, římské číslice, kadence
-  dsp.py          biquad filtry, LFO, šum, Karplus-Strong, syntetická IR
-  oscillators.py  Sine … FM, SuperSaw, Pulse, Pluck, Additive
-  filters.py      LP, HP, BP, Formant
-  modulation.py   LFO, PitchEnv, Ensemble
-  patch.py        ADSR, Patch.voice() (modulace, glide, round-robin)
-  automation.py   křivky automatizace a jejich cíle
-  metrics.py      mix metriky (7 pásem, šířka, crest, LRA) pro report a compare
-  mastering.py    hotové master řetězy (cinematic, darkpop, lofi)
-  presets.py      37 nástrojů s tagy, výchozí fx
-  drums.py        pattern stringy, render úderů
-  kits.py         bicí sady (classic, trap, cinematic, ...)
-  sfx.py          riser, impact, braam, subdrop, reverse swell, whoosh
-  fx.py           Reverb, Delay, LowPass, HighPass, Filter, EQ, Saturate, Sidechain
-  fx_space.py     Hall, Chorus, Width
-  fx_dyn.py       Compressor, Gate
-  fx_lofi.py      BitCrush, Tape
-  sfz.py          SFZ text -> regiony (hlavičky, #define, #include)
-  sampler.py      Sampler: vrstvy, round robin, smyčky, legato, mmap WAV
-  library.py      katalog samplovaných nástrojů, cesta ke vzorkům
-  install.py      stažení Salamander + VSCO 2 CE + VocalSet, generování SFZ
-  voices.py       VocalSet -> tóny (YIN, oktáva z harmonických, TD-PSOLA) -> SFZ
-  render.py       stopy -> busy -> master -> stereo buffer -> WAV
-  rules.py        pravidla teorie nad notami (bas, nevlastní tóny, paralely, ...)
-  analyze.py      mix report + hudební warningy, check report bez renderu
-  midi.py         MIDI export a čtení (SMF formát 1)
-  reference.py    analýza externí nahrávky (tempo/key/akordy/dynamika)
-  viz.py          ASCII piano roll + obálka mixu
-  cli.py          python -m paprika render|show|check|midi|play|presets|samples|analyze-ref|compare
+  song.py         Song, Track, Bus — čistý datový model
+  note.py         notace not (`A4:2 >D5:1 | ...`)
+  theory.py       stupnice, akordy, arpeggia (jen MIDI čísla)
+  harmony.py      harmonický plán, římské číslice, kadence
+  rules.py        pravidla teorie nad notami
+  sfz.py          SFZ -> regiony
+  sampler.py      sampler: vrstvy, round robin, smyčky, legato
+  library.py      katalog nahraných nástrojů
+  install.py      stažení nahrávek a generování SFZ
+  voices.py       VocalSet -> jednotlivé tóny (YIN, TD-PSOLA)
+  oscillators.py  filters.py  modulation.py  patch.py  presets.py
+  fx.py  fx_space.py  fx_dyn.py  fx_lofi.py  mastering.py  automation.py
+  render.py       stopy -> sběrnice -> master -> WAV
+  analyze.py      report a warningy    metrics.py  mix metriky
+  midi.py         MIDI export a čtení
+  viz.py  cli.py  ASCII výstup a příkazová řádka
+examples/         pět ukázek z tohoto README
+songs/            delší skladby (v2_showcase, divadlo, romantic)
+tools/            readme_media.py — obrázky a MP3 pro README
 ```
 
 Hranice jsou naschvál ostré: `render.py` neví nic o hudební teorii,
 `theory.py` a `harmony.py` nevědí nic o zvuku, `rules.py` a `midi.py` čtou
-jen datový model, `analyze.py` jen hotový buffer a datový model. Noty žijí v beatech, ne v sekundách — změna BPM je jeden parametr.
+jen datový model. Podrobnosti v [`CLAUDE.md`](CLAUDE.md) a návrhy
+v [`docs/superpowers/specs/`](docs/superpowers/specs/).
 
 ## Testy
 
 ```bash
-python -m pytest tests/
-python -m unittest discover tests
+python -m pytest tests/                                     # ~520 testů, bez sítě
+python -m unittest discover tests                           # bez pytestu
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py        # vyrenderuje všechny songy
-PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # nainstalované vzorky: úroveň, ladění
+PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # nainstalované nahrávky
 ```
 
-Ostatní testy sampleru běží bez sítě nad malými syntetickými WAV.
+Testy sampleru běží nad malými syntetickými WAV, nahrávky nepotřebují.
 
-`songs/v2_showcase.py` je poslechová ukázka všech novinek v2.
+Obrázky a MP3 v README se generují z ukázek:
 
-## Co v2 neobsahuje
+```bash
+pip install matplotlib imageio-ffmpeg
+python tools/readme_media.py
+```
 
-Export do hry (smyčky, stemy, vrstvy intenzity,
-stingery), žánrové style packy a Claude Code skill `/paprika` — to jsou další
-podprojekty. Dál chybí zpěv s textem, import MIDI do skladby, změny tempa
-uprostřed skladby a automatizace na úrovni jednotlivé noty.
+## Co zatím chybí
+
+Zpěv s textem, export pro hry (smyčky, stemy, stingery), žánrové style
+packy, import MIDI do skladby, změny tempa uprostřed skladby.
+
+## Nahrávky a jejich licence
+
+Paprika nahrávky nedistribuuje — `samples install` je stáhne přímo od
+autorů. Když použiješ výsledný zvuk ve hře nebo videu, uveď:
+
+- **Salamander Grand Piano V3** — Alexander Holm, **CC BY 3.0**
+- **VSCO 2 Community Edition** — Versilian Studios, **CC0**
+- **VocalSet** — J. Wilkins, P. Seetharaman, A. Wahl, B. Pardo, **CC BY 4.0**
+
+Přesné znění je v `CREDITS.txt` ve složce nahrávek. MP3 ukázky
+v `docs/audio/` z těchto nahrávek vznikly, platí pro ně stejné uvedení autorů.

@@ -29,7 +29,11 @@ verification tool after every change to a song.
 presets, drum chars, warning rules). Read it before writing a song file.
 `docs/superpowers/specs/2026-08-12-paprika-design.md` records the v1 design,
 `2026-09-23-engine-v2-design.md` the v2 engine. `songs/v2_showcase.py`
-exercises every v2 feature.
+exercises every v2 feature. `examples/` holds the five public README demos
+(sampled instruments only — piano, strings, voices, orchestra; keep them
+realistic, not synth); `tools/readme_media.py` regenerates
+`docs/images/*.png` and `docs/audio/*.mp3` from them (needs matplotlib +
+imageio-ffmpeg, not library dependencies).
 
 ## Commands
 

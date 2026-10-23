@@ -182,8 +182,11 @@ def _check(seg: np.ndarray, sr: int, noise: dict | None = None) -> tuple[str | N
         return "ticho", {}
     band = (f >= 300.0) & (f <= 8000.0)
     pb = p[band] + 1e-20
+    # těžiště v pásmu modelu: nad F_HI zbývá po odečtení jen šum elektroniky
+    # (VocalSet: ~4 % výkonu nad 16 kHz zvedalo těžiště o ~450 Hz)
+    model = (f >= F_LO) & (f <= F_HI)
     info = {
-        "centroid": float((f * p).sum() / tot),
+        "centroid": float((f[model] * p[model]).sum() / max(float(p[model].sum()), 1e-30)),
         "flatness": float(np.exp(np.mean(np.log(pb))) / np.mean(pb)),
     }
     rms = float(np.sqrt(np.mean(seg ** 2)))
@@ -603,7 +606,8 @@ def _verify(model: dict, sr: int = 44100, count: int = 12) -> dict:
     for y in ys:
         p = np.abs(np.fft.rfft(y)) ** 2
         f = np.fft.rfftfreq(y.size, 1.0 / sr)
-        cents.append(float((p * f).sum() / p.sum()))
+        band = (f >= F_LO) & (f <= F_HI)          # stejně jako těžiště korpusu
+        cents.append(float((p[band] * f[band]).sum() / p[band].sum()))
     return {"lsd_db": round(float(np.sqrt(np.mean((got - want) ** 2))), 2),
             "env_db": round(float(np.sqrt(np.mean(env ** 2))), 2),
             "synth_centroid": round(float(np.median(cents)), 1)}
@@ -627,8 +631,8 @@ def stats_lines(root: str | None = None) -> list[str]:
                      f"{m['rel_db'][1]:>7.0f} dB  {m['centroid']:>7.0f}  "
                      f"{m['synth_centroid']:>7.0f}  {100 * m['explained']:>3.0f}%  "
                      f"{m['lsd_db']:>5.2f}  {m['env_db']:>6.2f}")
-    lines.append("(těžiště a syntéza v Hz; LSD a obálka = odchylka syntézy od "
-                 "korpusu v dB, dobré je pod ~2 dB)")
+    lines.append("(těžiště korpusu a syntézy v Hz, v pásmu 150 Hz–16 kHz; LSD a obálka "
+                 "= odchylka syntézy od korpusu v dB, dobré je pod ~2 dB)")
     total: Counter = Counter()
     for st in data["stats"].values():
         total.update(st["rejected"])

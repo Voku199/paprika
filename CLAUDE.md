@@ -17,7 +17,9 @@ still sounded "chiptune") are done; next sub-projects are style packs +
 `/paprika` skill and game export (loops, stems, stingers). The AI-engine
 roadmap (`docs/superpowers/research/2026-10-21-ai-engine-pruzkum.md`) phase 1
 — harmony plan, theory checks, MIDI export — is done
-(`docs/superpowers/plans/2026-10-21-teorie-midi.md`).
+(`docs/superpowers/plans/2026-10-21-teorie-midi.md`). Human sounds (breath,
+vocal gestures, body/foley, mic simulation) have a research proposal, not yet
+approved: `docs/superpowers/research/2026-10-23-lidske-zvuky-pruzkum.md`.
 
 The library is *not* a music generator — melody, harmony and structure are
 written by the author (usually the AI). Paprika supplies theory, synthesis, FX,

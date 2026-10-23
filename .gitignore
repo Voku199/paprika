@@ -8,6 +8,8 @@ output/
 songs/output/
 *.wav
 *.mp3
+# ukázky do README (z examples/, generuje tools/readme_media.py)
+!docs/audio/*.mp3
 *.flac
 *.ogg
 songs_mp3/

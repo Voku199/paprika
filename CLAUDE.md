@@ -18,8 +18,10 @@ still sounded "chiptune") are done; next sub-projects are style packs +
 roadmap (`docs/superpowers/research/2026-10-21-ai-engine-pruzkum.md`) phase 1
 — harmony plan, theory checks, MIDI export — is done
 (`docs/superpowers/plans/2026-10-21-teorie-midi.md`). Human sounds (breath,
-vocal gestures, body/foley, mic simulation) have a research proposal, not yet
-approved: `docs/superpowers/research/2026-10-23-lidske-zvuky-pruzkum.md`.
+vocal gestures, body/foley, mic simulation): research proposal in
+`docs/superpowers/research/2026-10-23-lidske-zvuky-pruzkum.md`; phase H1
+(correlated humanize, `Proximity`/`RoomTone`/`DynEQ`, `HumanTrack` with
+physics-based breath/body sounds, breathing rules) is done, H2–H4 are not.
 
 The library is *not* a music generator — melody, harmony and structure are
 written by the author (usually the AI). Paprika supplies theory, synthesis, FX,
@@ -50,7 +52,7 @@ python -m paprika compare ref.mp3 output/x.wav          # mix metrics vs a refer
 python -m paprika samples                               # sampler: path, groups, instruments
 python -m paprika samples install all                   # ~2.3 GB, resumable
 
-python -m pytest tests/                                  # ~520 tests, ~75 s
+python -m pytest tests/                                  # ~570 tests, ~60 s
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py     # renders every song, ~2 min
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # installed samples: level + tuning
 python -m pytest tests/test_render.py::TestLimiter::test_tames_overs
@@ -93,6 +95,12 @@ Layer boundaries are deliberately sharp — keep them:
 - `oscillators.py`, `filters.py`, `modulation.py` — building blocks of a patch (`modulation.py` also holds `Ensemble`).
 - `patch.py` — `ADSR` + `Patch.voice()`: one phrase → one mono `(n,)` or stereo `(n, 2)` buffer; re-exports the building blocks.
 - `presets.py`, `kits.py`, `sfx.py` — instruments, drum kits, cinematic SFX; all synthesized, no samples.
+- `human.py` — human sounds from physics, no samples: breath/exhale (flow →
+  turbulence above a laminar threshold, ~U^1.5 compressed from U^3 → Klatt
+  cascade of vowel formants + front turbulence whose centre follows flow
+  speed), lip smack, heartbeat, cloth (minimum-jerk motion, PhISEM grains),
+  steps. Every generator takes `variant` as its last param. Also model-only
+  helpers `breath_phrases`, `air_seconds` used by `HumanTrack` and rules.
 - `sfz.py` — SFZ text -> `Region`s. Text only, no audio.
 - `sampler.py` — `Sampler`: region selection (key/vel/round robin), pitch shift +
   resample in one Hermite read, loops, legato, release. Knows no beats or pedal.
@@ -109,7 +117,9 @@ Layer boundaries are deliberately sharp — keep them:
   kept); rough ones (subharmonic > -33 dB) are dropped. `catalog.json` caches the
   notes so SFZ can be regenerated without re-cutting; singers added to `VOICES`
   later are cut and appended to the existing catalog by `build()`.
-- `fx.py`, `fx_space.py`, `fx_dyn.py`, `fx_lofi.py` — track/bus/master effects.
+- `fx.py`, `fx_space.py`, `fx_dyn.py`, `fx_lofi.py`, `fx_mic.py` — track/bus/master
+  effects (`fx_mic`: `Proximity` first-order shelf from the spherical-wave
+  formula, gated `RoomTone`; `DynEQ` lives in `fx_dyn`).
 - `automation.py` — automation curves and target resolution.
 - `metrics.py` — mix metrics of a finished buffer/file (7 bands, width, crest, LRA); used by the report and `compare`. Reads only audio.
 - `mastering.py` — ready-made master chains built from existing effects.
@@ -215,6 +225,12 @@ silently (the AI cannot hear the difference).
 cached in `drums._CACHE` keyed `(kit, name, sr)`, then scaled per hit.
 `SfxTrack` subclasses `DrumTrack` (hits are `SfxHit` with `params`,
 `dur_beats`); check `SfxTrack` **before** `DrumTrack` where they differ.
+`HumanTrack` subclasses `SfxTrack` (rendered through `sfx.render_sfx`, which
+also dispatches `human.GENERATORS`); unlike cinematic SFX its `humanize`
+moves timing, it may have a `performer` track whose phrases drive
+`breaths()` and the breathing rules, and each method assigns the next
+`variant` automatically so repeats are never the same cached sample. Check
+`HumanTrack` before `SfxTrack` where they differ (midi.py does).
 
 Mono tracks (`mono=True`): touching notes of a different pitch (or marked `>`)
 merge into one voice; same pitch without `>` retriggers (808 patterns).
@@ -233,6 +249,12 @@ merge into one voice; same pitch without `>` retriggers (808 patterns).
   `python -m paprika samples install <group>`, then
   `PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py`. Any SFZ file
   also works directly: `s.track(Sampler(path, legato=True))`.
+- **New human sound** — a generator `_name(sr, bpm, *params, variant)` in
+  `human.GENERATORS` (+ `HUMAN_NAMES`, `HUMAN_CHARS`), levels from physics or
+  a fixed peak (not per-instance normalization where loudness should vary),
+  and a `HumanTrack` method that resolves defaults and `self._variant(name, ...)`
+  before `_put`. `tests/test_human.py` checks bounds, determinism and that
+  variants differ.
 - **New drum kit** — a dict of `name -> f(sr)` in `kits.py`, registered in
   `KITS`; missing instruments fall back to `classic`.
 - **New oscillator / filter** — subclass `Osc` (`render(freq, n, sr, phase)`,

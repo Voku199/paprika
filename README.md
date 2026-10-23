@@ -96,7 +96,7 @@ podle zvuku.
 | `.chord(name, bar, dur, inv=0, oct=0)` | akord podle jména nebo seznamu pitchů |
 | `.arp(name, bar, pattern, rate, octaves)` | arpeggio; `up`/`down`/`updown`/`downup`/`random` |
 | `.fx(*efekty)` | připojí efektový řetěz |
-| `.humanize(timing, vel)` | rozhýbe časování (v beatech) a dynamiku (relativně) |
+| `.humanize(timing, vel, corr=0)` | rozhýbe časování (v beatech) a dynamiku (relativně); `corr` 0.8–0.95 = odchylky s pamětí jako u živého hráče |
 | `.clear(bars=)` | smaže rozsah taktů |
 | `.transpose(semitones)` | posune celou stopu |
 | `.repeat(bars, times)` | zkopíruje rozsah taktů dál po timeline |
@@ -115,6 +115,9 @@ swing=0)` a `.roll("h", bar, beat, beats, rate=1/32, vel=(60, 110))`.
 přesně na začátku taktu, `.impact(bar)`, `.braam(bar, "D2", bars)`,
 `.subdrop(bar)`, `.reverse_swell(to_bar, beats)`, `.whoosh(bar, beats)`.
 
+`s.human()` vrací stopu lidských zvuků (dech, kroky, tep, ...) — viz
+[Lidské zvuky](#lidské-zvuky).
+
 `s.bus("drums")` je sběrnice s vlastním fx řetězem a automatizací;
 `s.master` je poslední řetěz před limiterem.
 
@@ -126,6 +129,77 @@ lead.fx(LowPass(300, res=0.5)).automate("lowpass.cutoff",
                                         [(8, 300), (16, 8000)], "exp")
 s.master.automate("vol", [(0, 1), (15.875, 0), (16, 1)], "step")  # díra před dropem
 ```
+
+### Humanize s pamětí
+
+`humanize(corr=0)` posouvá každou notu nezávisle. Lidský hráč se ale od
+mřížky odchyluje plynule — odchylky jsou dlouhodobě korelované a posluchači
+je hodnotí jako lidštější (Hennig et al. 2011). `corr=0.85` zapne paměť
+(AR(1) přes noty v pořadí času): tóny jednoho akordu se posunou spolu
+s malým vlastním rozptylem a silnější tón přijde o chlup dřív. Rozsah
+zůstává ±`timing` a ±`vel`, `corr=0` je bit-identické s dřívějším chováním.
+
+```python
+cello.humanize(timing=0.02, vel=0.1, seed=3, corr=0.85)
+```
+
+## Lidské zvuky
+
+`s.human()` je stopa dechu, mlasknutí, tepu, šustění oblečení a kroků. Nejsou
+to nahrané smyčky: nádech vychází z fyziky proudu vzduchu (objem za čas dává
+průtok, slyšet je až turbulence nad prahem, která roste zhruba s U³, a trakt
+ji zabarví podle samohlásky). Rychlý nádech v krátké pauze je proto
+hlasitější a jasnější než pomalý hluboký, a každý výskyt je jiná varianta —
+dva nádechy za sebou nejsou stejný vzorek.
+
+```python
+from paprika import DynEQ
+
+cello = s.track("cello_solo")
+dech = s.human("dech", performer=cello, vol=0.2)  # blízký mikrofon zapnutý
+dech.breaths()                         # nádech před každou frází cella
+dech.lip_smack(3, beat=3.55)           # mlasknutí před prvním nástupem
+dech.exhale(15, beat=3, kind="sigh")   # vzdech po poslední notě
+dech.humanize(seed=4)                  # ±12 ms, korelovaně
+
+telo = s.human("telo")
+telo.steps((0, 3), every=1, surface="wood")
+telo.cloth(3, beats=1.5, fabric="cotton", motion="fidget")
+telo.heartbeat((0, 4), every=1)        # tepová frekvence = tempo / every
+pad.fx(DynEQ(3500, threshold=-45, range_db=4, source="dech"))  # pad uhne dechu
+```
+
+| Metoda | Co dělá |
+|---|---|
+| `.breath(to_bar, beat, beats, depth, kind, vowel)` | nádech, který skončí v `to_bar` + `beat`; `kind` mouth / nose / catch, `depth` objem 0..1 |
+| `.breaths(min_rest, kind="auto")` | nádechy před frázemi stopy `performer`: hloubka podle délky a dynamiky fráze, délka podle pauzy, v krátké pauze `catch`; končí 20 ms před nástupem (u akcentu 40 ms) |
+| `.exhale(bar, beat, beats, depth, kind)` | výdech: mouth / nose / sigh (vzdech, čelist se přivírá) |
+| `.lip_smack(bar, beat)` | mlasknutí rtů |
+| `.heartbeat(bars, every)` | tep „lub-dub“, systola se zkracuje s tepem |
+| `.cloth(bar, beat, beats, fabric, motion)` | šustění: cotton / nylon / wool, pohyb swing / fidget (profil minimálního trhnutí) |
+| `.steps(bars, every, surface)` | kroky střídavě levá/pravá: stone / wood / gravel / dirt |
+| `.humanize(timing=None, vel, corr=0.6)` | časování (výchozí ±12 ms) i dynamika, korelovaně |
+
+`s.human(name, vol=0.35, performer=, voice=, section=False, mic=True)`:
+`performer` je stopa (nebo její jméno), jejíž interpret dýchá — `breaths()`
+se řídí jejími frázemi, samohláska nádechu se vezme z artikulace
+(`soprano.ooh` → „u“) a report hlídá, že nádech nejde přes noty. `voice`
+male/female (výchozí podle jména nástroje), `section=True` pro sbor nebo
+sekci, která dýchá střídavě (pravidla o dechu se na ni nevztahují).
+`mic=True` přidá blízký mikrofon `Proximity(0.15)` + `RoomTone()`,
+`mic=False` nechá zvuk suchý. `variant=` vynutí konkrétní variantu (je jich 8).
+
+Efekty blízkého mikrofonu (použitelné na kteroukoli stopu):
+
+| Efekt | Co dělá |
+|---|---|
+| `Proximity(dist=0.15, pattern="cardioid", max_db=12, hp=50)` | proximity efekt směrového mikrofonu: shelf 1. řádu (s + k·c/r) / (s + k·c/ref); kardioida na 5 cm +14.6 dB na 100 Hz, na 30 cm +2.3 dB. `dist` jde automatizovat |
+| `RoomTone(level=-66, color="pink", attack=0.08, release=0.5)` | šum místnosti jen tam, kde stopa zní (s náběhem a doběhem) — žádné digitální ticho pod blízkým zdrojem |
+| `DynEQ(freq, q, threshold, ratio, range_db, source=)` | zvon, který stáhne pásmo jen při přebytku energie (ostré nádechy); `source` = klíč z jiné stopy |
+
+Fyzika, čísla a zdroje jsou v
+`docs/superpowers/research/2026-10-23-lidske-zvuky-pruzkum.md`;
+`songs/dech.py` je poslechová ukázka.
 
 ## Skutečné nástroje (sampler)
 
@@ -383,13 +457,19 @@ Pravidla warningů:
 | mono kompatibilita | korelace L/R stopy klesne pod 0 — v mono se vyruší |
 | statický zvuk | melodická stopa přes 16+ taktů bez modulace, automatizace i humanize |
 | teorie | pravidla z [Harmonický plán a kontrola teorie](#harmonický-plán-a-kontrola-teorie) |
+| nádech přes noty | nádech stopy `s.human(performer=...)` zasahuje do not interpreta (nejde dýchat a hrát zároveň) |
+| chybí nádech | fráze bez pauzy je delší, než vystačí vzduch při její dynamice (~20 s v mp, ~10 s ve ff) |
+| kulometný efekt | dva stejné lidské zvuky za sebou mají stejnou variantu |
+| dech na mřížce (INFO) | 4+ nádechy, všechny se stejným odstupem od mřížky — chybí humanize |
+| hlasitý nádech (INFO) | nádech je méně než 12 dB pod frází po něm (přirozeně 15–30 dB) |
 
 | přetížený sub | víc než 15 % výkonu pod 60 Hz (reference 3–7 %) |
 | úzké stereo | šířka mixu pod 8 % u skladby delší než 8 taktů |
 | tenké středy | méně než 15 % výkonu v 250 Hz–4 kHz |
 
 Maskování vypisuje jen čtyři nejdelší překryvy a tiché takty (pod -80 dBFS)
-ignoruje. `BANDS` ukazuje sedm pásem (sub, bass, lowmid, mid, himid, pres,
+ignoruje; stopy jen s gesty dechu přeskakuje (jejich hlasitost hlídá
+pravidlo hlasitého nádechu). `BANDS` ukazuje sedm pásem (sub, bass, lowmid, mid, himid, pres,
 air), `STEREO` šířku mixu a korelaci kanálů — obojí s `[ok]` proti
 cinematic cíli (sub ≤ 12 %, středy ≥ 20 %, šířka ≥ 10 %).
 
@@ -421,7 +501,10 @@ Co pomáhá (měřeno proti referencím):
 - **Prostor** — `Hall`/`Reverb` na melodické stopy, pan ±0.1–0.3.
 - **Mastering** — `s.master.fx(*mastering("cinematic"))` (také `darkpop`,
   `lofi`): HP 30 Hz, jemné EQ, glue kompresor, lehká páska.
-- **Humanize** na každé stopě, vibrato se zpožděním na sólech.
+- **Humanize** na každé stopě, u sól s pamětí (`corr=0.85`), vibrato se
+  zpožděním na sólech.
+- **Dech a tělo** — sólista a dechy dýchají (`s.human(performer=...)
+  .breaths()`), blízký zvuk má proximity a šum místnosti.
 - Ověř: `python -m paprika compare reference.mp3 output/song.wav`.
 
 ASCII náhled (`show`) kreslí timeline bez renderu — rychlá kontrola struktury:
@@ -475,7 +558,7 @@ potřebují `pip install imageio-ffmpeg` (lazy import, jen když se použije).
 ```
 paprika/
   __init__.py     veřejné API
-  song.py         Song, Track, DrumTrack, SfxTrack, Bus, Clip, timeline
+  song.py         Song, Track, DrumTrack, SfxTrack, HumanTrack, Bus, Clip, timeline
   note.py         Note a parsing notačních řetězců (včetně glide `>`)
   theory.py       stupnice, akordy, obraty, arpeggia
   harmony.py      harmonický plán: jména akordů, římské číslice, kadence
@@ -491,9 +574,11 @@ paprika/
   drums.py        pattern stringy, render úderů
   kits.py         bicí sady (classic, trap, cinematic, ...)
   sfx.py          riser, impact, braam, subdrop, reverse swell, whoosh
+  human.py        dech, výdech, mlasknutí, tep, šustění, kroky (fyzika, varianty)
   fx.py           Reverb, Delay, LowPass, HighPass, Filter, EQ, Saturate, Sidechain
   fx_space.py     Hall, Chorus, Width
-  fx_dyn.py       Compressor, Gate
+  fx_dyn.py       Compressor, DynEQ, Gate
+  fx_mic.py       Proximity, RoomTone (blízký mikrofon)
   fx_lofi.py      BitCrush, Tape
   sfz.py          SFZ text -> regiony (hlavičky, #define, #include)
   sampler.py      Sampler: vrstvy, round robin, smyčky, legato, mmap WAV
@@ -524,7 +609,8 @@ PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # nainstalované vzo
 
 Ostatní testy sampleru běží bez sítě nad malými syntetickými WAV.
 
-`songs/v2_showcase.py` je poslechová ukázka všech novinek v2.
+`songs/v2_showcase.py` je poslechová ukázka všech novinek v2,
+`songs/dech.py` lidských zvuků.
 
 ## Co v2 neobsahuje
 

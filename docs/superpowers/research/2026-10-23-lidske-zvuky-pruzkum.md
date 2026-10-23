@@ -2,6 +2,10 @@
 
 **Datum:** 2026-10-23
 **Typ:** průzkum + návrh implementace (ne schválený spec)
+**Stav:** fáze H1 implementována (2026-10-23, verze 2.3.0): `dsp.ar1`,
+`dsp.pink_walk`, `humanize(corr=)`, `Proximity`, `RoomTone`, `DynEQ`,
+`s.human()` / `HumanTrack` (`human.py`), pravidla dechu v reportu,
+ukázka `songs/dech.py`. Fáze H2–H4 zbývají.
 **Navazuje na:** `research/2026-10-21-ai-engine-pruzkum.md` (§4 hlasy, §5.3
 výraz), `specs/2026-09-23-realism-pass-design.md`, `paprika/sfx.py`,
 `paprika/voices.py`

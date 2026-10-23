@@ -18,7 +18,7 @@ from scipy import signal
 
 __all__ = ["KINDS", "LFO_SHAPES", "NOISE_COLORS", "biquad", "filt", "filt_varying",
            "res_to_q", "onepole", "lfo", "colored_noise", "karplus", "synth_ir",
-           "blep_saw", "cached_ir", "convolve"]
+           "blep_saw", "cached_ir", "convolve", "ar1", "pink_walk"]
 
 KINDS = ("lp", "hp", "bp", "notch", "peak", "lowshelf", "highshelf")
 Q_MIN, Q_MAX = 0.707, 12.0
@@ -98,17 +98,19 @@ def _zi(order: int, x: np.ndarray) -> np.ndarray:
     return np.zeros((order,) + tuple(x.shape[1:]), dtype=np.float64)
 
 
-def filt_varying(x, kind: str, cutoff, sr: int, q=0.707, gain_db: float = 0.0,
+def filt_varying(x, kind: str, cutoff, sr: int, q=0.707, gain_db=0.0,
                  stages: int = 1, block: int = 256) -> np.ndarray:
-    """Biquad, jehož cutoff a/nebo Q se mění v čase (pole délky n)."""
+    """Biquad, jehož cutoff, Q a/nebo zisk (peak/shelf) se mění v čase
+    (pole délky n)."""
     x = np.asarray(x, dtype=np.float64)
     n = x.shape[0]
-    if np.isscalar(cutoff) and np.isscalar(q):
+    if np.isscalar(cutoff) and np.isscalar(q) and np.isscalar(gain_db):
         return filt(x, kind, float(cutoff), sr, float(q), gain_db, stages)
     if n == 0:
         return x.astype(np.float32)
     cut = np.broadcast_to(np.asarray(cutoff, dtype=np.float64), (n,))
     qq = np.broadcast_to(np.asarray(q, dtype=np.float64), (n,))
+    gg = np.broadcast_to(np.asarray(gain_db, dtype=np.float64), (n,))
     y = x
     for _ in range(max(1, int(stages))):
         out = np.empty_like(y)
@@ -116,7 +118,7 @@ def filt_varying(x, kind: str, cutoff, sr: int, q=0.707, gain_db: float = 0.0,
         for s in range(0, n, block):
             e = min(n, s + block)
             m = (s + e) // 2
-            b, a = biquad(kind, cut[m], sr, qq[m], gain_db)
+            b, a = biquad(kind, cut[m], sr, qq[m], gg[m])
             out[s:e], zi = signal.lfilter(b, a, y[s:e], axis=0, zi=zi)
         y = out
     return y.astype(np.float32)
@@ -184,6 +186,38 @@ def lfo(shape: str, rate_hz: float, n: int, sr: int, phase: float = 0.0,
     vals = np.random.default_rng(seed).uniform(-1.0, 1.0, int(idx.max()) + 1)
     smooth = onepole(vals[idx], max(0.5, float(rate_hz) * 4.0), sr)
     return np.clip(smooth.astype(np.float64), -1.0, 1.0)
+
+
+def ar1(n: int, tau: float, sr: float = 1.0, seed: int = 0) -> np.ndarray:
+    """Ornstein-Uhlenbeck šum (AR(1)): rozptyl 1, časová konstanta `tau`.
+
+    Bloudí a vrací se ke středu — jako výška zpěváka kolem tónu nebo
+    odchylky hráče od metronomu. `tau` je v sekundách při `sr` vzorcích za
+    sekundu; s `sr=1` jde o počet kroků (např. not). Začíná ve stacionárním
+    stavu, takže první vzorky nejsou utlumené.
+    """
+    n = int(n)
+    if n <= 0:
+        return np.zeros(0)
+    a = math.exp(-1.0 / max(1e-9, float(tau) * float(sr)))
+    rng = np.random.default_rng(seed)
+    w = rng.standard_normal(n)
+    y, _ = signal.lfilter([math.sqrt(1.0 - a * a)], [1.0, -a], w,
+                          zi=[a * rng.standard_normal()])
+    return y
+
+
+def pink_walk(n: int, sr: float = 1.0, tau_min: float = 0.05, octaves: int = 6,
+              seed: int = 0) -> np.ndarray:
+    """≈1/f šum: součet AR(1) s časovými konstantami po oktávách od `tau_min`.
+
+    Na rozdíl od `ar1` má paměť na mnoha škálách najednou (Hennig 2011:
+    lidské odchylky v rytmu jsou dlouhodobě korelované). Rozptyl 1.
+    """
+    k = max(1, int(octaves))
+    total = sum(ar1(n, float(tau_min) * 2.0 ** i, sr, seed=seed * 101 + i)
+                for i in range(k))
+    return np.asarray(total, dtype=np.float64) / math.sqrt(k)
 
 
 NOISE_COLORS = ("white", "pink", "brown")

@@ -6,13 +6,16 @@ takže změna BPM je jeden parametr a nic se nepřepisuje.
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass, field
 
 import numpy as np
 
 from . import drums as _drums
+from . import dsp as _dsp
 from . import harmony as _harmony
+from . import human as _human
 from . import note as _note
 from . import theory
 from .harmony import ChordSpan
@@ -23,8 +26,8 @@ from .patch import Patch
 from .presets import preset
 from .sampler import Sampler
 
-__all__ = ["Song", "Track", "DrumTrack", "SfxTrack", "Bus", "Clip", "Section",
-           "THEORY_MODES", "suppress_render"]
+__all__ = ["Song", "Track", "DrumTrack", "SfxTrack", "HumanTrack", "Bus", "Clip",
+           "Section", "THEORY_MODES", "suppress_render"]
 
 # přísnost kontroly teorie (rules.py): free = cinematic/pop, strict = učebnice
 THEORY_MODES = ("free", "strict", "off")
@@ -34,6 +37,48 @@ THEORY_MODES = ("free", "strict", "off")
 _SUPPRESS_RENDER = False
 
 PEDAL_LIFT = 1.0 / 16.0   # beaty: zvednutí nohy při přešlápnutí pedálu
+
+# humanize s pamětí (corr > 0): tóny jednoho akordu sdílejí odchylku, vlastní
+# rozptyl je jen tenhle podíl; silnější úhoz přichází o chlup dřív
+# (melody lead) s touhle korelací mezi dynamikou a časováním
+HUMANIZE_SCATTER = 0.3
+HUMANIZE_VEL_LEAD = 0.3
+HUMAN_TIMING_SEC = 0.012  # s: výchozí rozptyl časování lidských zvuků
+
+
+def _check_corr(corr) -> float:
+    c = float(corr)
+    if not 0.0 <= c < 1.0:
+        raise ValueError(f"humanize: corr musí být 0 <= corr < 1, ne {corr!r} "
+                         f"(0 = nezávislé odchylky, 0.8–0.95 = lidská paměť)")
+    return c
+
+
+def _correlated_devs(onsets, corr: float, seed) -> tuple[np.ndarray, np.ndarray]:
+    """Odchylky časování a dynamiky v -1..1 pro události s danými starty.
+
+    Události se stejným startem (akord, úder více bubnů) tvoří skupinu se
+    společnou odchylkou. Mezi skupinami v pořadí času běží AR(1) s korelací
+    `corr` — odchylky se mění plynule, jako u živého hráče. Rozptyl odpovídá
+    rovnoměrnému rozdělení ±1 (σ = 1/√3), hodnoty jsou oříznuté na ±1.
+    """
+    onsets = np.asarray(onsets, dtype=np.float64)
+    m = onsets.size
+    if m == 0:
+        return np.zeros(0), np.zeros(0)
+    rng = np.random.default_rng(seed)
+    keys, group = np.unique(np.round(onsets, 6), return_inverse=True)
+    tau = -1.0 / math.log(corr)
+    z_t = _dsp.ar1(keys.size, tau, 1.0, seed=int(rng.integers(1 << 31)))
+    z_v = _dsp.ar1(keys.size, tau, 1.0, seed=int(rng.integers(1 << 31)))
+    lead = HUMANIZE_VEL_LEAD
+    common_t = math.sqrt(1.0 - lead * lead) * z_t - lead * z_v
+    sc = HUMANIZE_SCATTER
+    own = math.sqrt(1.0 - sc * sc)
+    t = own * common_t[group] + sc * rng.standard_normal(m)
+    v = own * z_v[group] + sc * rng.standard_normal(m)
+    lim = math.sqrt(3.0)
+    return np.clip(t / lim, -1.0, 1.0), np.clip(v / lim, -1.0, 1.0)
 
 
 class suppress_render:
@@ -237,18 +282,36 @@ class Track:
         return self
 
     def humanize(self, timing: float = 0.01, vel: float = 0.1,
-                 seed: int | None = None):
-        """Rozhýbe časování (v beatech) a dynamiku (relativně) všech not."""
-        rng = random.Random(seed)
+                 seed: int | None = None, corr: float = 0.0):
+        """Rozhýbe časování (v beatech) a dynamiku (relativně) všech not.
+
+        `corr` 0..1 je paměť odchylek: 0 = každá nota nezávisle (jako dřív),
+        0.8–0.95 = odchylky se mění plynule od noty k notě jako u živého
+        hráče, tóny akordu se posunou spolu a silnější tón přijde o chlup
+        dřív. Rozsah zůstává ±`timing` a ±`vel`.
+        """
+        corr = _check_corr(corr)
         self._humanized = True
-        for clip in self.clips:
-            for n in clip.notes:
-                if timing:
-                    n.start_beat = max(0.0, n.start_beat +
-                                       rng.uniform(-timing, timing))
-                if vel:
-                    scaled = n.velocity * (1.0 + rng.uniform(-vel, vel))
-                    n.velocity = int(max(1, min(127, round(scaled))))
+        if corr == 0.0:
+            rng = random.Random(seed)
+            for clip in self.clips:
+                for n in clip.notes:
+                    if timing:
+                        n.start_beat = max(0.0, n.start_beat +
+                                           rng.uniform(-timing, timing))
+                    if vel:
+                        scaled = n.velocity * (1.0 + rng.uniform(-vel, vel))
+                        n.velocity = int(max(1, min(127, round(scaled))))
+            return self
+        items = [(clip.start_beat + n.start_beat, n)
+                 for clip in self.clips for n in clip.notes]
+        dt, dv = _correlated_devs([b for b, _ in items], corr, seed)
+        for (_, n), t, v in zip(items, dt, dv):
+            if timing:
+                n.start_beat = max(0.0, n.start_beat + float(timing) * float(t))
+            if vel:
+                n.velocity = int(max(1, min(127, round(
+                    n.velocity * (1.0 + float(vel) * float(v))))))
         return self
 
     def clear(self, bars=None):
@@ -380,15 +443,26 @@ class DrumTrack(Track):
         return []
 
     def humanize(self, timing: float = 0.008, vel: float = 0.1,
-                 seed: int | None = None):
-        rng = random.Random(seed)
+                 seed: int | None = None, corr: float = 0.0):
+        """Jako `Track.humanize`; údery ve stejném okamžiku se posunou spolu."""
+        corr = _check_corr(corr)
         self._humanized = True
-        for h in self.hits:
+        if corr == 0.0:
+            rng = random.Random(seed)
+            for h in self.hits:
+                if timing:
+                    h.start_beat = max(0.0, h.start_beat + rng.uniform(-timing, timing))
+                if vel:
+                    h.velocity = int(max(1, min(127, round(
+                        h.velocity * (1.0 + rng.uniform(-vel, vel))))))
+            return self
+        dt, dv = _correlated_devs([h.start_beat for h in self.hits], corr, seed)
+        for h, t, v in zip(self.hits, dt, dv):
             if timing:
-                h.start_beat = max(0.0, h.start_beat + rng.uniform(-timing, timing))
+                h.start_beat = max(0.0, h.start_beat + float(timing) * float(t))
             if vel:
                 h.velocity = int(max(1, min(127, round(
-                    h.velocity * (1.0 + rng.uniform(-vel, vel))))))
+                    h.velocity * (1.0 + float(vel) * float(v))))))
         return self
 
     def clear(self, bars=None):
@@ -457,9 +531,209 @@ class SfxTrack(DrumTrack):
                          (float(beats),), float(beats))
 
     def humanize(self, timing: float = 0.0, vel: float = 0.1,
-                 seed: int | None = None):
+                 seed: int | None = None, corr: float = 0.0):
         """Rozhýbe jen velocity — časování SFX musí sedět na hrany taktů."""
-        return super().humanize(timing=0.0, vel=vel, seed=seed)
+        return super().humanize(timing=0.0, vel=vel, seed=seed, corr=corr)
+
+
+class HumanTrack(SfxTrack):
+    """Lidské zvuky: nádech, výdech, mlasknutí, srdce, šustění oblečení, kroky.
+
+    Dech patří k frázi: `breath(to_bar=...)` skončí přesně tam, kde fráze
+    začíná, a `breaths()` rozmístí nádechy samo podle not stopy `performer`
+    (kratší mezera = rychlejší a ostřejší nádech). Opakovaný zvuk dostane
+    pokaždé jinou variantu, jinak by zněl jako kulomet. Na rozdíl od
+    cinematic SFX smí `humanize` hýbat i časováním.
+    """
+
+    def __init__(self, song: "Song", name: str = "human", vol: float = 0.35,
+                 pan: float = 0.0, performer: Track | None = None,
+                 voice: str | None = None, seed: int = 0, section: bool = False):
+        super().__init__(song, name, vol, pan)
+        self.performer = performer
+        self.voice = voice or _human.voice_of(performer)
+        if self.voice not in _human.HUMAN_VOICES:
+            raise ValueError(f"neznámý hlas {self.voice!r}; k dispozici: "
+                             f"{', '.join(_human.HUMAN_VOICES)}")
+        self.seed = int(seed)
+        self.section = bool(section)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        who = f" performer={self.performer.name}" if self.performer else ""
+        return f"<HumanTrack {self.name} hits={len(self.hits)}{who}>"
+
+    # -- pomocné ----------------------------------------------------------
+    def _beats(self, sec: float) -> float:
+        return float(sec) * self.song.bpm / 60.0
+
+    def _variant(self, name: str, variant) -> int:
+        if variant is not None:
+            return int(variant) % _human.MAX_VARIANTS
+        count = sum(1 for h in self.hits if h.name == name)
+        return (self.seed * 5 + count) % _human.MAX_VARIANTS
+
+    def _vowel(self, vowel) -> str:
+        from .filters import VOWELS
+        v = vowel or _human.vowel_of(self.performer)
+        if v not in VOWELS:
+            raise ValueError(f"neznámá samohláska {v!r}; k dispozici: "
+                             f"{', '.join(VOWELS)}")
+        return v
+
+    @staticmethod
+    def _depth(depth: float) -> float:
+        d = float(depth)
+        if not 0.0 < d <= 1.0:
+            raise ValueError(f"depth je objem nádechu 0..1 (1 = hluboký), ne {depth!r}")
+        return d
+
+    # -- dech -------------------------------------------------------------
+    def breath(self, to_bar: float, beat: float = 0.0, beats: float | None = None,
+               depth: float | None = None, kind: str = "mouth",
+               vowel: str | None = None, vel: int = 100, variant: int | None = None):
+        """Nádech, který skončí v `to_bar` + `beat` (tam začíná fráze).
+
+        `kind`: mouth (ústy), nose (nosem, tišší a tmavší), catch (rychlý
+        nádech mezi frázemi). `beats` je délka (výchozí 0.45 / 0.6 / 0.2 s
+        podle tempa songu), `depth` objem 0..1 (výchozí 0.6, catch 0.35).
+        Stejný objem za kratší čas zní hlasitěji a jasněji. `vowel` je tvar
+        úst (výchozí podle nástroje stopy `performer`, jinak "a").
+        """
+        if kind not in _human.BREATH_KINDS:
+            raise ValueError(f"neznámý druh nádechu {kind!r}; k dispozici: "
+                             f"{', '.join(_human.BREATH_KINDS)}")
+        beats = self._beats(_human.BREATH_SEC[kind]) if beats is None else float(beats)
+        if beats <= 0:
+            raise ValueError("breath: beats musí být kladné")
+        depth = self._depth(depth if depth is not None
+                            else (0.35 if kind == "catch" else 0.6))
+        end = self._bar_to_beat(to_bar) + float(beat)
+        params = (kind, beats, depth, self._vowel(vowel), self.voice,
+                  self._variant("breath", variant))
+        return self._put("breath", end - beats, vel, params, beats)
+
+    def exhale(self, bar: float, beat: float = 0.0, beats: float | None = None,
+               depth: float = 0.5, kind: str = "mouth", vowel: str | None = None,
+               vel: int = 90, variant: int | None = None):
+        """Výdech od `bar` + `beat`: mouth, nose nebo sigh (vzdech — delší,
+        čelist se při něm přivírá). Výdech je pasivní: rychle naběhne
+        a exponenciálně dojde, jak plíce pružně vracejí vzduch."""
+        if kind not in _human.EXHALE_KINDS:
+            raise ValueError(f"neznámý druh výdechu {kind!r}; k dispozici: "
+                             f"{', '.join(_human.EXHALE_KINDS)}")
+        beats = self._beats(_human.EXHALE_SEC[kind]) if beats is None else float(beats)
+        if beats <= 0:
+            raise ValueError("exhale: beats musí být kladné")
+        params = (kind, beats, self._depth(depth), self._vowel(vowel), self.voice,
+                  self._variant("exhale", variant))
+        return self._put("exhale", self._bar_to_beat(bar) + float(beat), vel,
+                         params, beats)
+
+    def breaths(self, min_rest: float | None = None, kind: str = "auto",
+                vel: int | None = None, lead: float = 0.02):
+        """Nádechy před každou frází stopy `performer`.
+
+        Fráze končí pauzou aspoň `min_rest` beatů (výchozí 0.15 s). Hloubka
+        roste s délkou a dynamikou následující fráze, délka se vejde do
+        pauzy; v krátké pauze je rychlý `catch`. Nádech skončí `lead` sekund
+        před nástupem (u akcentu o 20 ms dřív — glotální uzávěr). Do pauzy
+        kratší než 0.12 s se nádech nevejde a vynechá se.
+        """
+        perf = self.performer
+        if perf is None:
+            raise ValueError("breaths() potřebuje performer: "
+                             "s.human(performer=stopa)")
+        if kind != "auto" and kind not in _human.BREATH_KINDS:
+            raise ValueError(f"neznámý druh nádechu {kind!r}; k dispozici: auto, "
+                             f"{', '.join(_human.BREATH_KINDS)}")
+        spb = 60.0 / self.song.bpm
+        rest = self._beats(_human.MIN_REST_SEC) if min_rest is None else float(min_rest)
+        vowel = self._vowel(None)
+        prev_end = None
+        for start, end, notes in _human.breath_phrases(perf.all_notes(), rest):
+            phrase_sec = (end - start) * spb
+            mean_vel = float(np.mean([n.velocity for n in notes]))
+            lead_sec = float(lead) + (0.02 if notes[0].velocity >= 105 else 0.0)
+            gap_sec = (start - (prev_end if prev_end is not None else 0.0)) * spb
+            avail = gap_sec - lead_sec - (0.05 if prev_end is not None else 0.0)
+            prev_end = end
+            if avail < 0.12:
+                continue
+            depth = float(np.clip(0.3 + 0.04 * phrase_sec
+                                  + 0.25 * (mean_vel / 127.0 - 0.5), 0.2, 1.0))
+            k = kind if kind != "auto" else ("catch" if avail < 0.3 else "mouth")
+            dur = min(float(np.clip(0.2 + 0.6 * depth, 0.25, 0.9)), avail)
+            if k == "catch":
+                dur, depth = min(dur, 0.25), min(depth, 0.45)
+            v = vel if vel is not None else int(np.clip(55 + 0.45 * mean_vel, 40, 120))
+            beats = dur / spb
+            end_beat = start - lead_sec / spb
+            params = (k, beats, depth, vowel, self.voice, self._variant("breath", None))
+            self._put("breath", end_beat - beats, v, params, beats)
+        return self
+
+    # -- ústa a tělo ------------------------------------------------------
+    def lip_smack(self, bar: float, beat: float = 0.0, vel: int = 70,
+                  variant: int | None = None):
+        """Mlasknutí rtů — typicky 50–200 ms před nástupem po dlouhé pauze."""
+        return self._put("lip_smack", self._bar_to_beat(bar) + float(beat), vel,
+                         (self._variant("lip_smack", variant),))
+
+    def heartbeat(self, bars, every: float = 1.0, beat: float = 0.0,
+                  vel: int = 100):
+        """Tep každých `every` beatů v rozsahu `bars=(od, do)`; tepová
+        frekvence = tempo / `every` (120 BPM, every=2 → 60 tepů/min)."""
+        lo, hi = (bars if isinstance(bars, (tuple, list)) else (bars, bars + 1))
+        if float(every) <= 0:
+            raise ValueError("heartbeat: every musí být kladné")
+        rate = round(self.song.bpm / float(every), 3)
+        at = self._bar_to_beat(lo) + float(beat)
+        while at < self._bar_to_beat(hi) - 1e-9:
+            self._put("heartbeat", at, vel, (rate, self._variant("heartbeat", None)))
+            at += float(every)
+        return self
+
+    def cloth(self, bar: float, beat: float = 0.0, beats: float = 1.0,
+              fabric: str = "cotton", motion: str = "swing", vel: int = 90,
+              variant: int | None = None):
+        """Šustění oblečení po dobu `beats`: `fabric` cotton/nylon/wool,
+        `motion` swing (jeden plynulý pohyb) nebo fidget (několik drobných)."""
+        if fabric not in _human.FABRICS:
+            raise ValueError(f"neznámá látka {fabric!r}; k dispozici: "
+                             f"{', '.join(_human.FABRICS)}")
+        if motion not in _human.MOTIONS:
+            raise ValueError(f"neznámý pohyb {motion!r}; k dispozici: "
+                             f"{', '.join(_human.MOTIONS)}")
+        return self._put("cloth", self._bar_to_beat(bar) + float(beat), vel,
+                         (fabric, float(beats), motion,
+                          self._variant("cloth", variant)), float(beats))
+
+    def steps(self, bars, every: float = 1.0, beat: float = 0.0,
+              surface: str = "stone", vel: int = 90):
+        """Kroky každých `every` beatů v rozsahu `bars=(od, do)`, střídavě
+        levá a pravá noha. Povrch: stone, wood, gravel, dirt."""
+        if surface not in _human.SURFACES:
+            raise ValueError(f"neznámý povrch {surface!r}; k dispozici: "
+                             f"{', '.join(_human.SURFACES)}")
+        lo, hi = (bars if isinstance(bars, (tuple, list)) else (bars, bars + 1))
+        if float(every) <= 0:
+            raise ValueError("steps: every musí být kladné")
+        at = self._bar_to_beat(lo) + float(beat)
+        foot = 0
+        while at < self._bar_to_beat(hi) - 1e-9:
+            self._put("step", at, vel, (surface, foot, self._variant("step", None)))
+            at += float(every)
+            foot = 1 - foot
+        return self
+
+    def humanize(self, timing: float | None = None, vel: float = 0.1,
+                 seed: int | None = None, corr: float = 0.6):
+        """Rozhýbe časování i dynamiku (dech nesedí na mřížce). Výchozí
+        `timing` je ±12 ms podle tempa — méně než mezera `lead` (20 ms),
+        kterou `breaths()` nechává před frází."""
+        if timing is None:
+            timing = self._beats(HUMAN_TIMING_SEC)
+        return DrumTrack.humanize(self, timing=timing, vel=vel, seed=seed, corr=corr)
 
 
 class Bus:
@@ -614,6 +888,28 @@ class Song:
     def sfx(self, vol: float = 0.6, pan: float = 0.0, name: str = "sfx") -> SfxTrack:
         """Přidá stopu cinematic efektů (riser, impact, braam, ...)."""
         t = SfxTrack(self, self._unique(name), vol, pan)
+        self.tracks.append(t)
+        return t
+
+    def human(self, name: str = "human", vol: float = 0.35, pan: float = 0.0,
+              performer=None, voice: str | None = None, seed: int = 0,
+              section: bool = False, mic: bool = True) -> HumanTrack:
+        """Přidá stopu lidských zvuků (dech, mlasknutí, srdce, oblečení, kroky).
+
+        `performer` je stopa (nebo její jméno), jejíž interpret dýchá:
+        `breaths()` rozmístí nádechy podle jejích frází a report hlídá, že
+        nádech nejde přes noty. `voice` male/female (výchozí podle nástroje),
+        `section=True` pro sbor nebo sekci (dýchá střídavě, pravidla o dechu
+        se na ni nevztahují). `mic=True` přidá blízký mikrofon:
+        `Proximity(0.15)` a `RoomTone()`; `mic=False` nechá zvuk suchý.
+        """
+        if isinstance(performer, str):
+            performer = self.get(performer)
+        t = HumanTrack(self, self._unique(name), vol, pan, performer=performer,
+                       voice=voice, seed=seed, section=section)
+        if mic:
+            from .fx_mic import Proximity, RoomTone
+            t.fx(Proximity(dist=0.15), RoomTone())
         self.tracks.append(t)
         return t
 

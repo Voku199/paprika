@@ -16,6 +16,7 @@ import numpy as np
 from scipy import signal
 
 from . import dsp
+from . import human as _human
 from .drums import DrumHit
 from .filters import Formant
 from .oscillators import SuperSaw
@@ -177,11 +178,16 @@ _CACHE: dict = {}
 
 
 def render_sfx(name: str, params: tuple, sr: int, bpm: float) -> np.ndarray:
-    """Vyrenderuje (a nacachuje) jeden SFX při velocity 127, tvar `(m, 2)`."""
-    if name not in _GENERATORS:
-        raise KeyError(f"neznámý SFX {name!r}; k dispozici: {', '.join(SFX_NAMES)}")
+    """Vyrenderuje (a nacachuje) jeden SFX při velocity 127, tvar `(m, 2)`.
+
+    Bere i lidské zvuky z `human.py` (dech, kroky, ...); jejich `params`
+    obsahují variantu, takže opakovaný zvuk není z cache tentýž vzorek.
+    """
+    gen = _GENERATORS.get(name) or _human.GENERATORS.get(name)
+    if gen is None:
+        raise KeyError(f"neznámý SFX {name!r}; k dispozici: "
+                       f"{', '.join(SFX_NAMES + _human.HUMAN_NAMES)}")
     key = (name, tuple(params), sr, float(bpm))
     if key not in _CACHE:
-        _CACHE[key] = np.asarray(_GENERATORS[name](sr, float(bpm), *params),
-                                 dtype=np.float32)
+        _CACHE[key] = np.asarray(gen(sr, float(bpm), *params), dtype=np.float32)
     return _CACHE[key]

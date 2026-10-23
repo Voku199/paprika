@@ -32,7 +32,8 @@ from .automation import Automation
 from .drums import DRUM_CHARS, drum_names, parse_pattern
 from .fx import (EQ, Delay, Filter, Fx, HighPass, LowPass, Reverb, Saturate,
                  Sidechain)
-from .fx_dyn import Compressor, Gate
+from .fx_dyn import Compressor, DynEQ, Gate
+from .fx_mic import Proximity, RoomTone
 from .fx_lofi import BitCrush, Tape
 from .fx_space import Chorus, Hall, Width
 from .harmony import HarmonyError, parse_chord, roman_of
@@ -50,17 +51,19 @@ from .presets import (PRESET_TAGS, PRESETS, preset, preset_fx, preset_names,
                       presets_by_tag, tag_names)
 from .render import RenderResult, limiter, mix, render_song, write_wav
 from .sampler import SampleError, Sampler
+from .human import HUMAN_NAMES
 from .sfx import SFX_NAMES
-from .song import Bus, Clip, DrumTrack, Section, SfxTrack, Song, Track
+from .song import Bus, Clip, DrumTrack, HumanTrack, Section, SfxTrack, Song, Track
 from .theory import (CHORDS, SCALES, TheoryError, arp, chord, in_scale, invert,
                      note_name, pitch, scale, scale_pcs)
 from .viz import piano_roll, waveform
 
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 
 __all__ = [
     # model
-    "Song", "Track", "DrumTrack", "SfxTrack", "Bus", "Clip", "Section", "Note",
+    "Song", "Track", "DrumTrack", "SfxTrack", "HumanTrack", "Bus", "Clip",
+    "Section", "Note",
     "Automation",
     # teorie
     "scale", "scale_pcs", "chord", "arp", "invert", "pitch", "note_name",
@@ -77,7 +80,8 @@ __all__ = [
     "instrument_names", "samples_root", "INSTRUMENTS",
     # efekty
     "Fx", "Reverb", "Hall", "Delay", "LowPass", "HighPass", "Filter", "EQ",
-    "Saturate", "Sidechain", "Compressor", "Gate", "Chorus", "Width",
+    "Saturate", "Sidechain", "Compressor", "DynEQ", "Gate", "Chorus", "Width",
+    "Proximity", "RoomTone",
     "BitCrush", "Tape", "mastering", "MASTERING_STYLES",
     # render a zpětná vazba
     "render_song", "RenderResult", "mix", "limiter", "write_wav",
@@ -86,5 +90,6 @@ __all__ = [
     # noty, bicí, sfx
     "parse", "NoteLengthError", "NoteParseError", "DEFAULT_VELOCITY",
     "parse_pattern", "drum_names", "DRUM_CHARS", "kit_names", "SFX_NAMES",
+    "HUMAN_NAMES",
     "__version__",
 ]

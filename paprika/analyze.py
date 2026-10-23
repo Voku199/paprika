@@ -9,15 +9,19 @@ import os
 
 import numpy as np
 
+from . import human as _human
 from . import metrics as _metrics
 from . import theory
 from .rules import EPS, Warning_, harmony_lines, theory_warnings
-from .song import DrumTrack, Song
+from .song import DrumTrack, HumanTrack, Song
 
 __all__ = ["report", "warnings_for", "model_warnings", "check_report",
            "band_energy", "db", "Warning_"]
 
 BANDS = ((0.0, 250.0), (250.0, 4000.0), (4000.0, 22050.0))
+BREATH_EPS = 0.02        # beaty: o tolik smí nádech zasáhnout do noty
+BREATH_GRID = 0.25       # beaty: mřížka pro pravidlo „dech na mřížce“
+BREATH_BELOW_DB = 12.0   # nádech má být aspoň o tolik tišší než fráze po něm
 BAND_NAMES = ("low", "mid", "high")
 
 
@@ -134,6 +138,17 @@ SILENT_BAR_DB = -80.0     # takt tišší než tohle se do maskování nepočít
 MASKING_SHOWN = 4         # kolik nejdelších překryvů report vypíše jako WARN
 
 
+BREATH_GESTURES = frozenset({"breath", "exhale", "lip_smack"})
+
+
+def _gestures_only(t) -> bool:
+    """Stopa jen s krátkými gesty dechu: zní zlomek taktu a o desítky dB
+    tišeji, takže podíl pásem v taktu o maskování nic neříká — hlasitost
+    dechu hlídá `_breath_level`. Tep a kroky se kontrolují dál."""
+    return (isinstance(t, HumanTrack) and bool(t.hits)
+            and all(h.name in BREATH_GESTURES for h in t.hits))
+
+
 def _masking(song: Song, buffers: dict, warns: list) -> None:
     sr = song.sample_rate
     bar_samples = int(round(song.beats_per_bar * song.seconds_per_beat * sr))
@@ -145,6 +160,8 @@ def _masking(song: Song, buffers: dict, warns: list) -> None:
     for t in song.tracks:
         buf = buffers.get(t.name)
         if buf is None or not np.any(buf):
+            continue
+        if _gestures_only(t):
             continue
         mats[t.name] = _per_bar_bands(buf, sr, bar_samples, bars)
         # numerický šum (třeba z konvoluce) v tichém taktu není hudba
@@ -223,6 +240,109 @@ def _dissonance(song: Song, warns: list) -> None:
                     break
             if reported >= 3:
                 break
+
+
+def _breathing(song: Song, warns: list) -> None:
+    """Dech jako fyzika: nádech nejde přes noty interpreta, fráze se musí
+    vejít do zásoby vzduchu, stejný vzorek nezazní dvakrát po sobě a nádechy
+    nemají strojově stejný odstup od mřížky."""
+    spb = 60.0 / song.bpm
+    for t in song.tracks:
+        if not isinstance(t, HumanTrack):
+            continue
+        breaths = sorted((h for h in t.hits if h.name == "breath"),
+                         key=lambda h: h.start_beat)
+        perf = t.performer
+        if perf is not None and not t.section:
+            notes = perf.all_notes()
+            shown = 0
+            for b in breaths:
+                lo, hi = b.start_beat, b.start_beat + b.dur_beats
+                if any(n.start_beat < hi - BREATH_EPS
+                       and n.start_beat + n.dur_beats > lo + BREATH_EPS for n in notes):
+                    bar = _bar_of(song, hi)
+                    warns.append(Warning_(
+                        "WARN", t.name,
+                        f"bar {bar}   nádech jde přes noty stopy {perf.name} — "
+                        f"interpret nemůže dýchat a hrát zároveň; posuň ho do "
+                        f"pauzy nebo zkrať", bar))
+                    shown += 1
+                    if shown >= 3:
+                        break
+            rest = _human.MIN_REST_SEC / spb
+            shown = 0
+            for start, end, ns in _human.breath_phrases(notes, rest):
+                sec = (end - start) * spb
+                vel = float(np.mean([n.velocity for n in ns]))
+                limit = _human.air_seconds(vel)
+                if sec > limit:
+                    bar = _bar_of(song, start)
+                    warns.append(Warning_(
+                        "WARN", perf.name,
+                        f"bar {bar}   fráze trvá {sec:.0f} s bez pauzy na nádech "
+                        f"(při velocity {vel:.0f} vystačí vzduch asi na "
+                        f"{limit:.0f} s) — rozděl ji pauzou", bar))
+                    shown += 1
+                    if shown >= 3:
+                        break
+        shown = 0
+        prev: dict = {}
+        for h in sorted(t.hits, key=lambda h: h.start_beat):
+            if prev.get(h.name) == h.params:
+                bar = _bar_of(song, h.start_beat)
+                warns.append(Warning_(
+                    "WARN", t.name,
+                    f"bar {bar}   {h.name} je stejný vzorek jako předchozí — "
+                    f"kulometný efekt; nech variant=None", bar))
+                shown += 1
+                if shown >= 3:
+                    break
+            prev[h.name] = h.params
+        if len(breaths) >= 4:
+            ends = np.array([b.start_beat + b.dur_beats for b in breaths])
+            off = ends - np.round(ends / BREATH_GRID) * BREATH_GRID
+            if float(np.std(off)) < 1e-4:
+                warns.append(Warning_(
+                    "INFO", t.name,
+                    "nádechy mají všechny stejný odstup od mřížky — zní "
+                    "strojově, zkus humanize()"))
+
+
+def _breath_level(song: Song, buffers: dict, warns: list) -> None:
+    """Nádech hlasitější než fráze po něm zní jako ASMR, ne jako hudebník."""
+    sr = song.sample_rate
+    spb = 60.0 / song.bpm
+    for t in song.tracks:
+        perf = getattr(t, "performer", None)
+        if not isinstance(t, HumanTrack) or perf is None:
+            continue
+        own, other = buffers.get(t.name), buffers.get(perf.name)
+        if own is None or other is None:
+            continue
+        shown = 0
+        for b in sorted((h for h in t.hits if h.name == "breath"),
+                        key=lambda h: h.start_beat):
+            lo = int(b.start_beat * spb * sr)
+            hi = int((b.start_beat + b.dur_beats) * spb * sr)
+            if lo < 0 or hi <= lo or hi >= own.size:
+                continue
+            breath = float(np.sqrt(np.mean(own[lo:hi] ** 2))) * t.vol
+            phrase = other[hi:hi + sr]
+            if phrase.size == 0:
+                continue
+            ph = float(np.sqrt(np.mean(phrase ** 2))) * perf.vol
+            if breath < 1e-6 or ph < 1e-6:
+                continue
+            gap = db(ph) - db(breath)
+            if gap < BREATH_BELOW_DB:
+                bar = _bar_of(song, b.start_beat + b.dur_beats)
+                warns.append(Warning_(
+                    "INFO", t.name,
+                    f"bar {bar}   nádech je jen {gap:.0f} dB pod frází "
+                    f"{perf.name} (přirozeně 15–30 dB) — ztiš stopu dechu", bar))
+                shown += 1
+                if shown >= 3:
+                    return
 
 
 def _gaps(song: Song, warns: list) -> None:
@@ -380,6 +500,8 @@ def warnings_for(song: Song, audio: np.ndarray, buffers: dict,
     _gaps(song, warns)
     _static_sound(song, warns)
     _sample_range(song, warns)
+    _breathing(song, warns)
+    _breath_level(song, buffers, warns)
     warns.extend(theory_warnings(song))
     warns.sort(key=lambda w: 0 if w.level == "WARN" else 1)
     return warns
@@ -395,6 +517,7 @@ def model_warnings(song: Song) -> list:
     _gaps(song, warns)
     _static_sound(song, warns)
     _sample_range(song, warns)
+    _breathing(song, warns)
     warns.extend(theory_warnings(song))
     warns.sort(key=lambda w: 0 if w.level == "WARN" else 1)
     return warns

@@ -18,7 +18,7 @@ import struct
 from dataclasses import dataclass, field
 
 from . import harmony as _harmony
-from .song import DrumTrack, SfxTrack, Song
+from .song import DrumTrack, HumanTrack, SfxTrack, Song
 
 __all__ = ["PPQ", "GM_PROGRAMS", "GM_DRUMS", "MidiError", "MidiNote", "MidiTrack",
            "MidiData", "to_bytes", "export", "read"]
@@ -213,6 +213,10 @@ def to_bytes(song: Song) -> tuple[bytes, list[str]]:
     chunks = [_conductor(song, notes)]
     melodic = 0
     for t in song.tracks:
+        if isinstance(t, HumanTrack):
+            notes.append(f"{t.name}: lidské zvuky (dech, kroky, ...) jsou zvuk, "
+                         f"ne noty — do MIDI se nevejdou")
+            continue
         if isinstance(t, SfxTrack):
             notes.append(f"{t.name}: SFX stopa (riser, impact, ...) je zvuk, ne "
                          f"noty — do MIDI se nevejde")

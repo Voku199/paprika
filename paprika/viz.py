@@ -10,6 +10,7 @@ import numpy as np
 
 from . import theory
 from .drums import DRUM_CHARS
+from .human import HUMAN_CHARS
 from .sfx import SFX_CHARS
 from .song import DrumTrack, SfxTrack, Song
 
@@ -70,7 +71,7 @@ def piano_roll(song: Song, bars=None, res: int = 8) -> str:
                     if cells[j] == ".":
                         cells[j] = "-"
                 if 0 <= i < total and cells[i] in ".-":
-                    cells[i] = SFX_CHARS.get(h.name, "*")
+                    cells[i] = SFX_CHARS.get(h.name) or HUMAN_CHARS.get(h.name, "*")
         elif isinstance(t, DrumTrack):
             for h in t.hits:
                 i = onset(h.start_beat)

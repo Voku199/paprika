@@ -253,6 +253,10 @@ class TestGenerators(unittest.TestCase):
         "heartbeat": (70.0, 0),
         "cloth": ("nylon", 1.0, "fidget", 0),
         "step": ("gravel", 1, 3),
+        "hum": (48.0, 2.0, "male", 0),
+        "sigh": (62.0, 5.0, 2.4, "female", 0),
+        "effort": (50.0, 0.6, "a", "male", 0),
+        "laugh": (60.0, 4, 4.5, "a", "male", 0),
     }
 
     def setUp(self):

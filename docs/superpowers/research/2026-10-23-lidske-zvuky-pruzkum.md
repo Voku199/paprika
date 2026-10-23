@@ -10,7 +10,23 @@ ukázka `songs/dech.py`. Fáze H2 implementována (2026-10-23, verze 2.4.0):
 `s.human(breath_model="auto")`, `python -m paprika samples breaths`.
 H2 je ověřená jen na syntetických nahrávkách (síť cloudové session
 nepustila zenodo.org); prahy hledání je potřeba zkontrolovat na skutečném
-korpusu. Fáze H3–H4 zbývají.
+korpusu. Fáze H3 implementována (2026-10-23, verze 2.5.0): `Glottal`
+(LF/Rd, jitter, shimmer, aspirace modulovaná tokem), `Tract` (plochy ->
+formanty -> kaskáda, 5parametrová trubice fitovaná na formanty),
+`Formant(mode="cascade", vary=)`, znělá gesta hum / sigh / effort / laugh
+s výškou z harmonického plánu, `voices.voice_quality`, pravidlo „sterilní
+hlas“, preset `choir_tract`, ukázka `songs/hlas.py`. Zbývá H4.
+
+**Ověření na skutečných datech (2026-10-23):** z výstupu
+`samples breaths --examples` (10 skutečných nádechů, female7, female8,
+male3) vyšlo: (1) skutečné nádechy mají těžiště 2.2–2.4 kHz a hlavní
+energii v 1–2 kHz u obou pohlaví, fyzikální dech z H1 byl o 1.5 kHz
+jasnější — jas, šířky formantů a přední turbulence jsou podle nich
+překalibrované (chyba v pásmech 11.5 -> 4.7 dB); (2) dva nádechy male3
+začínaly 40–60 ms doznívání předchozího tónu, které YIN přehlédl —
+hledání teď vyřazuje rámce s tónovým spektrem (`TONAL_FLAT`). Vlastní
+model dostali jen tři zpěváci; proč u ostatních hledání selhává, ukáže až
+textový výpis `samples breaths` (důvody odmítnutí).
 **Navazuje na:** `research/2026-10-21-ai-engine-pruzkum.md` (§4 hlasy, §5.3
 výraz), `specs/2026-09-23-realism-pass-design.md`, `paprika/sfx.py`,
 `paprika/voices.py`

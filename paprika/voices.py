@@ -27,7 +27,7 @@ __all__ = ["VoiceNote", "VOICES", "VOWELS", "TAKES", "track_pitch", "find_notes"
            "singer_range", "all_singers",
            "fix_long_tones", "spectral_octave",
            "psola", "extract_notes", "plan_voice", "write_voice_sfz", "build",
-           "CATALOG"]
+           "voice_quality", "CATALOG"]
 
 CATALOG = "catalog.json"
 NOTE_RMS_DB = -18.0        # každý vyříznutý tón se srovná na tuhle hlasitost
@@ -267,6 +267,58 @@ def subharmonic_db(x: np.ndarray, sr: int, pitch: float) -> float:
 
     f0 = 440.0 * 2.0 ** ((pitch - 69) / 12)
     return 20.0 * math.log10(max(peak(f0 / 2), peak(1.5 * f0), 1e-12) / top)
+
+
+def voice_quality(x: np.ndarray, sr: int, f0: float | None = None) -> dict:
+    """Lokální jitter a shimmer (%) a HNR (dB) znělého úseku.
+
+    Jako „voice report“ Praatu, zjednodušeně: periody se hledají
+    porovnáním sousedních period (posun s největší korelací v ±20 % kolem
+    odhadu, parabolické zpřesnění), takže filtr kolem F0 kolísání
+    nevyhladí. Jitter = průměrný rozdíl sousedních period / průměrná
+    perioda, shimmer totéž pro RMS period, HNR z průměrné korelace
+    sousedních period r: 10·log10(r / (1 - r)). Lidský modální hlas má
+    jitter ~0.2–1 %, shimmer ~1–4 %, HNR ~15–25 dB; syntéza bez
+    mikro-variací má jitter i shimmer skoro nula a HNR přes 35 dB.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    if f0 is None:
+        pitch, _, _ = track_pitch(x, sr)
+        if np.isnan(pitch).all():
+            raise ValueError("voice_quality: úsek nemá znělou výšku")
+        f0 = 440.0 * 2.0 ** ((float(np.nanmedian(pitch)) - 69.0) / 12.0)
+    per = sr / float(f0)
+    w = int(round(per))
+    lo, hi = int(0.8 * per), int(1.2 * per) + 1
+    t = float(np.argmax(np.abs(x[:w + 1])))
+    marks, rs, amps = [t], [], []
+    while t + hi + w < x.size:
+        i = int(t)
+        a = x[i:i + w]
+        lags = np.arange(lo, hi)
+        segs = np.stack([x[i + L:i + L + w] for L in lags])
+        num = segs @ a
+        den = np.sqrt((segs ** 2).sum(axis=1) * float(a @ a)) + 1e-12
+        c = num / den
+        j = int(np.argmax(c))
+        shift = float(lags[j])
+        if 0 < j < c.size - 1:
+            d = c[j - 1] - 2.0 * c[j] + c[j + 1]
+            if d < 0:
+                shift += 0.5 * (c[j - 1] - c[j + 1]) / d
+        rs.append(float(c[j]))
+        amps.append(float(np.sqrt(np.mean(a ** 2))))
+        t += shift
+        marks.append(t)
+    if len(marks) < 4:
+        raise ValueError("voice_quality: úsek je na měření moc krátký")
+    periods = np.diff(marks)
+    amps = np.asarray(amps)
+    r = float(np.clip(np.mean(rs), 1e-6, 1.0 - 1e-6))
+    return {"f0": float(f0),
+            "jitter": float(np.mean(np.abs(np.diff(periods))) / np.mean(periods) * 100.0),
+            "shimmer": float(np.mean(np.abs(np.diff(amps))) / np.mean(amps) * 100.0),
+            "hnr": float(10.0 * math.log10(r / (1.0 - r)))}
 
 
 # --------------------------------------------------------------------------

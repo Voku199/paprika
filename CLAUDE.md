@@ -21,10 +21,15 @@ roadmap (`docs/superpowers/research/2026-10-21-ai-engine-pruzkum.md`) phase 1
 vocal gestures, body/foley, mic simulation): research proposal in
 `docs/superpowers/research/2026-10-23-lidske-zvuky-pruzkum.md`; phase H1
 (correlated humanize, `Proximity`/`RoomTone`/`DynEQ`, `HumanTrack` with
-physics-based breath/body sounds, breathing rules) and H2 (breath models
-from VocalSet, `breath.py`) are done; H3–H4 are not. H2 was built and tested
-on synthetic recordings only (zenodo.org was blocked in the cloud session) —
-its thresholds still need a check on the real corpus via `samples breaths`.
+physics-based breath/body sounds, breathing rules), H2 (breath models
+from VocalSet, `breath.py`) and H3 (`Glottal` source, `Tract` filter, voiced
+gestures hum/sigh/effort/laugh, `voices.voice_quality`, `choir_tract`) are
+done; H4 (neural corpus) is not. H2 was built on synthetic recordings
+(zenodo.org was blocked in the cloud session); 10 real breaths from the
+user's `samples breaths --examples` then calibrated the physics breath
+(centroid 2.2–2.4 kHz) and exposed note tails YIN misses (now excluded by
+`breath.TONAL_FLAT`). The `samples breaths` stats text from the real corpus
+has not been seen yet — few singers reached `MIN_BREATHS`, cause unknown.
 
 The library is *not* a music generator — melody, harmony and structure are
 written by the author (usually the AI). Paprika supplies theory, synthesis, FX,
@@ -60,7 +65,7 @@ python -m paprika samples                               # sampler: path, groups,
 python -m paprika samples install all                   # ~2.3 GB, resumable
 python -m paprika samples breaths --examples output/dechy  # breath models: stats + WAVs
 
-python -m pytest tests/                                  # ~590 tests, ~60 s
+python -m pytest tests/                                  # ~620 tests, ~60 s
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py     # renders every song, ~2 min
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # installed samples: level + tuning
 python -m pytest tests/test_render.py::TestLimiter::test_tames_overs
@@ -101,14 +106,26 @@ Layer boundaries are deliberately sharp — keep them:
 - `song.py` — `Song` / `Track` / `DrumTrack` / `SfxTrack` / `Bus` / `Clip`. Pure data model, no files, no CLI.
 - `dsp.py` — pure array DSP (biquads, time-varying filters, LFO, noise, Karplus-Strong, synthetic IR, polyBLEP). No model, no theory.
 - `oscillators.py`, `filters.py`, `modulation.py` — building blocks of a patch (`modulation.py` also holds `Ensemble`).
+  `Glottal` / `oscillators.glottal`: LF glottal-flow derivative from Rd
+  (Fant 1995) via precomputed per-Rd tables, per-period jitter/shimmer,
+  flow-modulated aspiration, 2× oversampled. `Tract`: area function ->
+  reflection coefficients -> D(z) roots (`tube_formants`, cached, computed at
+  the rate where 44 sections exactly fill the length) -> `dsp.cascade` of
+  Klatt resonators; vowel shapes are a 5-parameter tube fitted to the
+  `tenor` table (`VOWEL_TUBES`). `Formant(mode="cascade")` normalizes each
+  note to half the input RMS; the default parallel mode is unchanged.
 - `patch.py` — `ADSR` + `Patch.voice()`: one phrase → one mono `(n,)` or stereo `(n, 2)` buffer; re-exports the building blocks.
 - `presets.py`, `kits.py`, `sfx.py` — instruments, drum kits, cinematic SFX; all synthesized, no samples.
 - `human.py` — human sounds from physics, no samples: breath/exhale (flow →
   turbulence above a laminar threshold, ~U^1.5 compressed from U^3 → Klatt
   cascade of vowel formants + front turbulence whose centre follows flow
   speed), lip smack, heartbeat, cloth (minimum-jerk motion, PhISEM grains),
-  steps. Every generator takes `variant` as its last param. Also model-only
-  helpers `breath_phrases`, `air_seconds` used by `HumanTrack` and rules.
+  steps, and voiced gestures hum/sigh/effort/laugh (`glottal` -> `Tract`,
+  pitch from `pitch_curve`: 2nd-order overshoot, OU drift, >10 Hz fine
+  fluctuation). Every generator takes `variant` as its last param. Also
+  model-only helpers `breath_phrases`, `air_seconds` used by `HumanTrack`
+  and rules. `HumanTrack._pitch("chord")` picks the plan's chord tone
+  nearest `GESTURE_CENTER[gesture][voice]`.
 - `sfz.py` — SFZ text -> `Region`s. Text only, no audio.
 - `sampler.py` — `Sampler`: region selection (key/vel/round robin), pitch shift +
   resample in one Hermite read, loops, legato, release. Knows no beats or pedal.
@@ -125,6 +142,9 @@ Layer boundaries are deliberately sharp — keep them:
   kept); rough ones (subharmonic > -33 dB) are dropped. `catalog.json` caches the
   notes so SFZ can be regenerated without re-cutting; singers added to `VOICES`
   later are cut and appended to the existing catalog by `build()`.
+  `voice_quality(x, sr, f0)` measures local jitter/shimmer (%) and HNR (dB) by
+  matching consecutive periods (tests use it to keep `Glottal` and the gestures
+  in human ranges; the sterile-voice rule itself checks `Glottal` params, no audio).
 - `breath.py` — VocalSet breaths -> model: before every sung onset (YIN run
   ≥ 0.15 s) find noise above the room floor ending ≤ 0.4 s before it, reject
   rumble/click/tone/hiss by spectrum, describe each breath as loudness contour

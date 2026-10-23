@@ -68,6 +68,42 @@ class TestFind(unittest.TestCase):
         why, _ = breath._check(sung_tone(55, SR, 0.4), SR)
         self.assertEqual(why, "tónový")
 
+    def test_tone_tail_is_not_breath(self):
+        """YIN doznívání tónu přehlédne (VocalSet male3): nádech nesmí začít v něm."""
+        from sample_fixture import breath_sound, sung_tone
+        tail_n = int(0.12 * SR)
+        decay = np.exp(-np.arange(tail_n) / SR / 0.04)
+        tail = sung_tone(48, SR, 0.5)[int(0.1 * SR):int(0.1 * SR) + tail_n] * decay  # ~60 ms nad nádechem
+        b = breath_sound(SR, 0.4, 1300.0, 3)
+        b[:tail_n] += tail                               # doznívání přechází do nádechu
+        parts = [np.zeros(int(0.3 * SR)), sung_tone(48, SR, 1.0), b,
+                 np.zeros(int(0.06 * SR)), sung_tone(55, SR, 1.0), np.zeros(int(0.3 * SR))]
+        x = np.concatenate(parts) + 0.001 * np.random.default_rng(1).standard_normal(
+            sum(p.size for p in parts))
+        tail0 = 1.3
+        real = voices.track_pitch
+
+        def deaf(sig, sr, *a, **k):                      # YIN doznívání neslyší
+            pitch, rms, hop = real(sig, sr, *a, **k)
+            t = np.arange(pitch.size) * hop
+            pitch[(t >= tail0 - 0.02) & (t < tail0 + 0.12)] = np.nan
+            return pitch, rms, hop
+
+        with mock.patch.object(voices, "track_pitch", deaf):
+            found, _ = breath.find_breaths(x, SR)
+            with mock.patch.object(breath, "TONAL_FLAT", 0.0):
+                naive, _ = breath.find_breaths(x, SR)
+        self.assertEqual(len(found), 1)
+        self.assertGreater(found[0].t0, tail0 + 0.04)    # až po doznívání
+        self.assertLess(naive[0].t0, tail0 + 0.02)       # bez kontroly začne v tónu
+
+    def test_tonal_frames(self):
+        from sample_fixture import breath_sound, sung_tone
+        fw = int(0.02 * SR)
+        tone = sung_tone(48, SR, 0.2)[2000:2000 + fw]
+        noise = breath_sound(SR, 0.2, 2000.0, 1)[3000:3000 + fw]
+        self.assertEqual(breath._tonal(np.stack([tone, noise]), SR).tolist(), [True, False])
+
     def test_silence_has_no_breaths(self):
         found, _ = breath.find_breaths(np.zeros(SR), SR)
         self.assertEqual(found, [])

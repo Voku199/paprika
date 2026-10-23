@@ -44,9 +44,9 @@ from .mastering import MASTERING_STYLES, mastering
 from .midi import export as export_midi
 from .midi import read as read_midi
 from .note import DEFAULT_VELOCITY, Note, NoteLengthError, NoteParseError, parse
-from .patch import (ADSR, BP, FM, HP, LFO, LP, Additive, Ensemble, Formant, Noise, Osc,
-                    Patch, PitchEnv, Pluck, Pulse, Saw, Sine, Square, SuperSaw,
-                    Tri, midi_to_freq)
+from .patch import (ADSR, BP, FM, HP, LFO, LP, Additive, Ensemble, Formant, Glottal,
+                    Noise, Osc, Patch, PitchEnv, Pluck, Pulse, Saw, Sine, Square,
+                    SuperSaw, Tract, Tri, midi_to_freq)
 from .presets import (PRESET_TAGS, PRESETS, preset, preset_fx, preset_names,
                       presets_by_tag, tag_names)
 from .render import RenderResult, limiter, mix, render_song, write_wav
@@ -58,7 +58,7 @@ from .theory import (CHORDS, SCALES, TheoryError, arp, chord, in_scale, invert,
                      note_name, pitch, scale, scale_pcs)
 from .viz import piano_roll, waveform
 
-__version__ = "2.4.0"
+__version__ = "2.5.0"
 
 __all__ = [
     # model
@@ -71,8 +71,8 @@ __all__ = [
     "HarmonyError", "parse_chord", "roman_of",
     # zvuk
     "Patch", "Osc", "Sine", "Saw", "Square", "Tri", "Noise", "FM",
-    "SuperSaw", "Pulse", "Pluck", "Additive",
-    "ADSR", "LP", "HP", "BP", "Formant", "LFO", "PitchEnv", "Ensemble",
+    "SuperSaw", "Pulse", "Pluck", "Additive", "Glottal",
+    "ADSR", "LP", "HP", "BP", "Formant", "Tract", "LFO", "PitchEnv", "Ensemble",
     "midi_to_freq",
     "preset", "preset_names", "preset_fx", "presets_by_tag", "tag_names",
     "PRESETS", "PRESET_TAGS",

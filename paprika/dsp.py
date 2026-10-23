@@ -18,7 +18,8 @@ from scipy import signal
 
 __all__ = ["KINDS", "LFO_SHAPES", "NOISE_COLORS", "biquad", "filt", "filt_varying",
            "res_to_q", "onepole", "lfo", "colored_noise", "karplus", "synth_ir",
-           "blep_saw", "cached_ir", "convolve", "ar1", "pink_walk"]
+           "blep_saw", "cached_ir", "convolve", "ar1", "pink_walk",
+           "resonator", "cascade"]
 
 KINDS = ("lp", "hp", "bp", "notch", "peak", "lowshelf", "highshelf")
 Q_MIN, Q_MAX = 0.707, 12.0
@@ -122,6 +123,48 @@ def filt_varying(x, kind: str, cutoff, sr: int, q=0.707, gain_db=0.0,
             out[s:e], zi = signal.lfilter(b, a, y[s:e], axis=0, zi=zi)
         y = out
     return y.astype(np.float32)
+
+
+def resonator(f: float, bw: float, sr: int) -> tuple[list, list]:
+    """Klattův rezonátor 2. řádu (formant) s jednotkovým ziskem na 0 Hz."""
+    c = -math.exp(-2.0 * math.pi * bw / sr)
+    b = 2.0 * math.exp(-math.pi * bw / sr) * math.cos(2.0 * math.pi * f / sr)
+    return [1.0 - b - c], [1.0, -b, -c]
+
+
+def cascade(x, formants, sr: int, scale=1.0, block: int = 256) -> np.ndarray:
+    """Signál přes kaskádu rezonátorů — hlasový trakt jako v Klattově syntéze.
+
+    `formants` jsou dvojice (frekvence, šířka pásma) v Hz; obojí smí být
+    křivka po samplech (pohyb jazyka, čelisti). `scale` násobí všechny
+    frekvence (délka traktu), také číslo nebo křivka. Když se něco mění v
+    čase, koeficienty platí pro střed bloku a stav filtru jde dál.
+    Formanty nad 0.45·sr se vynechají (konstantní) nebo ořežou (křivka).
+    """
+    y = np.asarray(x, dtype=np.float64)
+    n = y.shape[0]
+    varying = np.ndim(scale) > 0 or any(np.ndim(f) > 0 or np.ndim(b) > 0
+                                        for f, b in formants)
+    if not varying:
+        for f, bw in formants:
+            f = float(f) * float(scale)
+            if f < sr * 0.45:
+                b, a = resonator(f, bw, sr)
+                y = signal.lfilter(b, a, y, axis=0)
+        return y
+    sc = np.broadcast_to(np.asarray(scale, dtype=np.float64), (n,))
+    for f, bw in formants:
+        ff = np.broadcast_to(np.asarray(f, dtype=np.float64), (n,))
+        bb = np.broadcast_to(np.asarray(bw, dtype=np.float64), (n,))
+        out = np.empty_like(y)
+        zi = _zi(2, y)
+        for s in range(0, n, block):
+            e = min(n, s + block)
+            m = (s + e) // 2
+            b, a = resonator(min(ff[m] * sc[m], sr * 0.45), bb[m], sr)
+            out[s:e], zi = signal.lfilter(b, a, y[s:e], axis=0, zi=zi)
+        y = out
+    return y
 
 
 def _onepole_coef(cutoff: float, sr: int) -> float:

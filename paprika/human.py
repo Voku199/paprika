@@ -36,18 +36,23 @@ import numpy as np
 from scipy import signal
 
 from . import dsp
-from .filters import FORMANTS, VOWELS
+from .filters import FORMANTS, VOWELS, Tract
+from .oscillators import glottal
 
 __all__ = ["HUMAN_NAMES", "HUMAN_CHARS", "BREATH_KINDS", "EXHALE_KINDS",
            "HUMAN_VOICES", "FABRICS", "MOTIONS", "SURFACES", "MAX_VARIANTS",
            "BREATH_SEC", "EXHALE_SEC", "GENERATORS", "breath_phrases",
-           "air_seconds", "voice_of", "vowel_of"]
+           "air_seconds", "voice_of", "vowel_of", "VOICE_GESTURES",
+           "GESTURE_SEC", "GESTURE_CENTER", "pitch_curve"]
 
 TWO_PI = 2.0 * math.pi
 
-HUMAN_NAMES = ("breath", "exhale", "lip_smack", "heartbeat", "cloth", "step")
+HUMAN_NAMES = ("breath", "exhale", "lip_smack", "heartbeat", "cloth", "step",
+               "hum", "sigh", "effort", "laugh")
 HUMAN_CHARS = {"breath": "^", "exhale": "~", "lip_smack": "'", "heartbeat": "@",
-               "cloth": "%", "step": "x"}
+               "cloth": "%", "step": "x", "hum": "m", "sigh": "\\", "effort": "!",
+               "laugh": "h"}
+VOICE_GESTURES = ("hum", "sigh", "effort", "laugh")
 BREATH_KINDS = ("mouth", "nose", "catch")
 EXHALE_KINDS = ("mouth", "nose", "sigh")
 HUMAN_VOICES = ("male", "female")
@@ -65,7 +70,7 @@ FLOW_REF = 3.0        # l/s: měřítko průtoku pro hlasitost a jas
 BREATH_EXP = 1.5      # turbulence ~U^3; stlačeno, aby dech zůstal v mixu
 BREATH_RMS = 0.08     # RMS referenčního nádechu (ústa, depth 0.6, 0.45 s) při vel 127
 CEILING = 0.95
-BW_OPEN = 2.5         # otevřená glotis rozšíří pásma formantů (dech, šepot)
+BW_OPEN = 4.0         # otevřená glotis rozšíří pásma formantů (dech, šepot)
 VOICE_SCALE = {"male": 1.0, "female": 1.17}   # kratší trakt = vyšší formanty
 NOSE_GAIN = 0.7       # nosem proteče méně vzduchu, dech je tišší
 # nosní dutina: (Hz, šířka pásma Hz); antirezonance kolem 1.1 kHz
@@ -75,9 +80,15 @@ NASAL_ZERO = 1100.0
 # nad 4 kHz nepadalo jako kaskáda pěti rezonátorů
 HIGH_POLES = ((4500.0, 900.0), (5800.0, 1200.0))
 # přední turbulence (zuby, rty / nosní dírky): (podíl, střed pásma Hz)
-FRONT_MOUTH = (0.7, 3500.0)
-FRONT_NOSE = (0.4, 2500.0)
+FRONT_MOUTH = (1.0, 1200.0)
+FRONT_NOSE = (0.5, 800.0)
 FRONT_SPEED_REF = 1.0  # rychlost proudu (průtok / FLOW_REF), při které platí podíl
+BRIGHT_LO, BRIGHT_SPAN = 400.0, 800.0  # Hz: jas zdroje = LO + SPAN * rychlost^0.8
+# Jas, šířky formantů a přední turbulence jsou zkalibrované na 10 skutečných
+# nádechů VocalSet (female7, female8, male3; samples breaths --examples,
+# 2026-10-23): těžiště 2.2–2.4 kHz u obou pohlaví, hlavní energie 1–2 kHz.
+# Původní odhad (3.7–3.9 kHz) byl o 1.5 kHz jasnější než skutečný dech.
+RADIATION = 1.0        # vyzařování rty 1 - a z^-1 (1 = +6 dB/okt, 0 = rovně)
 DATA_TILT = 3.0       # dB/okt nad 1 kHz na zdvojnásobení rychlosti proudu (model z dat)
 
 # --- zásoba vzduchu pro frázi (pravidlo „chybí nádech“) --------------------
@@ -186,37 +197,6 @@ def _peak(x: np.ndarray, level: float) -> np.ndarray:
     return x * (level / peak) if peak > 0 else x
 
 
-def _resonator(f: float, bw: float, sr: int) -> tuple[list, list]:
-    """Klattův rezonátor 2. řádu s jednotkovým ziskem na 0 Hz."""
-    c = -math.exp(-TWO_PI * bw / sr)
-    b = 2.0 * math.exp(-math.pi * bw / sr) * math.cos(TWO_PI * f / sr)
-    return [1.0 - b - c], [1.0, -b, -c]
-
-
-def _cascade(x: np.ndarray, formants, sr: int, scale=1.0, block: int = 256) -> np.ndarray:
-    """Šum přes kaskádu rezonátorů (trakt). `scale` může být křivka po
-    samplech (pohyb čelisti): pak se koeficienty mění po blocích."""
-    y = np.asarray(x, dtype=np.float64)
-    n = y.shape[0]
-    if np.ndim(scale) == 0:
-        for f, bw in formants:
-            f = float(f) * float(scale)
-            if f < sr * 0.45:
-                b, a = _resonator(f, bw, sr)
-                y = signal.lfilter(b, a, y)
-        return y
-    sc = np.broadcast_to(np.asarray(scale, dtype=np.float64), (n,))
-    for f, bw in formants:
-        out = np.empty_like(y)
-        zi = np.zeros(2)
-        for s in range(0, n, block):
-            e = min(n, s + block)
-            b, a = _resonator(min(float(f) * sc[(s + e) // 2], sr * 0.45), bw, sr)
-            out[s:e], zi = signal.lfilter(b, a, y[s:e], zi=zi)
-        y = out
-    return y
-
-
 def _min_jerk(u: np.ndarray) -> np.ndarray:
     """Rychlost pohybu s minimálním trhnutím na 0..1, maximum 1."""
     u = np.clip(u, 0.0, 1.0)
@@ -292,10 +272,11 @@ def _airflow(sr: int, sec: float, depth: float, kind: str, vowel: str, voice: st
     # zdroj u glotis, filtrovaný celým traktem (jako Klattovo „h“); jas
     # roste s rychlostí proudu
     src = rng.standard_normal(n) * env
-    bright = dsp.filt_varying(src, "lp", 1200.0 + 4000.0 * speed ** 0.8, sr).astype(np.float64)
+    bright = dsp.filt_varying(src, "lp", BRIGHT_LO + BRIGHT_SPAN * speed ** 0.8,
+                              sr).astype(np.float64)
     tract_len = rng.uniform(0.96, 1.04) * VOICE_SCALE[voice]
     if kind == "nose":
-        body = _cascade(bright, NASAL, sr, scale=tract_len)
+        body = dsp.cascade(bright, NASAL, sr, scale=tract_len)
         body = dsp.filt(body, "notch", NASAL_ZERO * tract_len, sr, q=1.4).astype(np.float64)
         front_k, front_f = FRONT_NOSE
     else:
@@ -305,9 +286,9 @@ def _airflow(sr: int, sec: float, depth: float, kind: str, vowel: str, voice: st
         if kind == "sigh":
             # při vzdechu se čelist přivírá: formanty klesnou asi o desetinu
             scale = tract_len * np.linspace(1.0, 0.9, n)
-        body = _cascade(bright, formants, sr, scale=scale)
+        body = dsp.cascade(bright, formants, sr, scale=scale)
         front_k, front_f = FRONT_MOUTH
-    body = np.diff(body, prepend=0.0)        # vyzařování rty (+6 dB/okt)
+    body = signal.lfilter([1.0, -RADIATION], [1.0], body)   # vyzařování rty
     # turbulence u zubů a rtů vyzařuje skoro nefiltrovaná: široké pásmo,
     # jehož střed roste s rychlostí proudu (Strouhal: f ~ v/d)
     front_src = rng.standard_normal(n) * env * np.sqrt(speed)
@@ -400,7 +381,7 @@ def _lip_smack(sr, bpm, variant):
         x[start:start + burst] += amp * rng.standard_normal(burst) * np.exp(-tb / 0.0004)
         t0 += rng.uniform(0.003, 0.009)
     click = dsp.filt(x, "bp", rng.uniform(2200.0, 3200.0), sr, q=0.9).astype(np.float64)
-    b, a = _resonator(rng.uniform(1000.0, 1400.0), 400.0, sr)     # dutina úst
+    b, a = dsp.resonator(rng.uniform(1000.0, 1400.0), 400.0, sr)     # dutina úst
     y = click + 0.4 * signal.lfilter(b, a, x)
     return _stereo(_edges(_peak(y, 0.5), sr, 0.001))
 
@@ -506,6 +487,175 @@ def _step(sr, bpm, surface, foot, variant):
     return _stereo(_edges(y, sr, 0.001), left, right)
 
 
+# --------------------------------------------------------------------------
+# hlas: hlasivky (oscillators.glottal) -> trakt (filters.Tract)
+# --------------------------------------------------------------------------
+
+# výchozí délky gest v sekundách a pohodlná výška (MIDI), kolem které
+# HumanTrack hledá tón akordu; smích je výrazně nad mluvenou výškou
+# (Bachorowski et al. 2001: muži ~280 Hz, ženy ~420 Hz)
+GESTURE_SEC = {"hum": 1.5, "sigh": 1.3, "effort": 0.3}
+GESTURE_CENTER = {"hum": {"male": 48, "female": 57}, "sigh": {"male": 52, "female": 62},
+                  "effort": {"male": 50, "female": 60}, "laugh": {"male": 60, "female": 67}}
+VOICE_RMS = {"hum": 0.06, "sigh": 0.07, "effort": 0.14, "laugh": 0.1}   # při vel 127
+TRACT_VOICE = {"male": "tenor", "female": "alto"}
+# přestřel výšky po změně cíle: tlumený systém 2. řádu (Saitou 2007)
+OVERSHOOT_HZ, OVERSHOOT_DAMP = 4.5, 0.55
+DRIFT_TAU = 0.35       # s: bloudění výšky (OU)
+FINE_HZ = 10.0         # jemné chvění nad touhle frekvencí
+
+
+def pitch_curve(n: int, sr: int, points, rng, drift: float = 6.0, fine: float = 2.5,
+                settle: bool = True) -> np.ndarray:
+    """MIDI výška hlasu po samplech.
+
+    `points` = `[(podíl délky 0..1, MIDI), ...]` je zamýšlená melodie (i
+    glissanda). Na ni: přestřel a dojezd po změně cíle (2. řád, `settle`),
+    bloudění kolem cíle o `drift` centů (Ornstein–Uhlenbeck, τ 0.35 s) a
+    jemné chvění nad 10 Hz o `fine` centů (Saitou: fine fluctuation).
+    """
+    u = (np.arange(n) + 0.5) / max(1, n)
+    target = np.interp(u, [p[0] for p in points], [float(p[1]) for p in points])
+    y = target
+    if settle and n > 1:
+        w0 = 2.0 * math.pi * OVERSHOOT_HZ
+        b, a = signal.bilinear([w0 * w0], [1.0, 2.0 * OVERSHOOT_DAMP * w0, w0 * w0], sr)
+        y = signal.lfilter(b, a, target - target[0]) + target[0]
+    y = y + float(drift) / 100.0 * dsp.ar1(n, DRIFT_TAU, sr, seed=int(rng.integers(1 << 30)))
+    if fine:
+        f = dsp.filt(rng.standard_normal(n), "hp", FINE_HZ, sr).astype(np.float64)
+        y = y + float(fine) / 100.0 * f / max(1e-12, float(np.sqrt(np.mean(f ** 2))))
+    return y
+
+
+def _voiced(sr: int, midi: np.ndarray, rng, voice: str, vowel: str = "a", rd=1.0,
+            aspiration: float = 0.08, morph=None, nasal: float = 0.0,
+            jitter: float = 0.008, shimmer: float = 0.025,
+            doubling: float = 0.0) -> np.ndarray:
+    """Hlasivky -> trakt pro danou výškovou křivku (MIDI po samplech)."""
+    f0 = 440.0 * 2.0 ** ((np.asarray(midi, dtype=np.float64) - 69.0) / 12.0)
+    src = glottal(f0, f0.size, sr, rd=rd, jitter=jitter, shimmer=shimmer,
+                  aspiration=aspiration, doubling=doubling,
+                  seed=int(rng.integers(1 << 30))).astype(np.float64)
+    tract = Tract(vowel, voice=TRACT_VOICE[voice], morph=morph, nasal=nasal,
+                  vary=0.02)
+    return tract.apply(src, sr, freq=float(np.median(f0))).astype(np.float64)
+
+
+def _level(y: np.ndarray, name: str) -> np.ndarray:
+    rms = float(np.sqrt(np.mean(y ** 2))) if y.size else 0.0
+    return y * (VOICE_RMS[name] / rms) if rms > 0 else y
+
+
+def _ramp(n: int, sr: int, attack: float, release: float) -> np.ndarray:
+    env = np.ones(n)
+    a, r = min(n // 2, int(attack * sr)), min(n // 2, int(release * sr))
+    if a > 0:
+        env[:a] = 0.5 - 0.5 * np.cos(np.linspace(0.0, math.pi, a))
+    if r > 0:
+        env[-r:] *= 0.5 + 0.5 * np.cos(np.linspace(0.0, math.pi, r))
+    return env
+
+
+def _check_voice(voice: str, vowel: str = "a") -> None:
+    if voice not in HUMAN_VOICES:
+        raise ValueError(f"neznámý hlas {voice!r}; k dispozici: {', '.join(HUMAN_VOICES)}")
+    if vowel not in VOWELS:
+        raise ValueError(f"neznámá samohláska {vowel!r}; k dispozici: {', '.join(VOWELS)}")
+
+
+def _hum(sr, bpm, midi, beats, voice, variant):
+    """Bručení „mmm“ se zavřenými rty: nosní murmur, měkký nástup s malým
+    nájezdem zdola, na konci výška lehce klesne."""
+    _check_voice(voice)
+    rng = _rng(41, variant)
+    n = max(64, int(float(beats) * 60.0 / float(bpm) * sr))
+    m = float(midi)
+    pitch = pitch_curve(n, sr, [(0.0, m - 0.4), (0.12, m), (0.85, m), (1.0, m - 0.5)], rng)
+    y = _voiced(sr, pitch, rng, voice, "u", rd=rng.uniform(1.0, 1.3),
+                aspiration=0.04, nasal=1.0)
+    y *= _ramp(n, sr, 0.08, 0.18) * (1.0 - 0.15 * np.linspace(0.0, 1.0, n))
+    return _stereo(_edges(_ceiling(_level(y, "hum")), sr))
+
+
+def _sigh(sr, bpm, midi, drop, beats, voice, variant):
+    """Vzdech s hlasem: „h“ na začátku, dyšný hlas klesající o `drop`
+    půltónů, čelist se přivírá (a -> o), síla dojde jako výdech."""
+    _check_voice(voice)
+    rng = _rng(43, variant)
+    n = max(64, int(float(beats) * 60.0 / float(bpm) * sr))
+    m = float(midi)
+    pitch = pitch_curve(n, sr, [(0.0, m), (0.12, m + 0.3), (1.0, m - float(drop))], rng,
+                        drift=8.0)
+    rd = np.linspace(1.2, 2.0, n)
+    sec = n / sr
+    y = _voiced(sr, pitch, rng, voice, "a", rd=rd, aspiration=0.15,
+                morph=("a", "o", sec))
+    t = np.arange(n) / sr
+    voicing = np.clip((t - 0.05) / 0.08, 0.0, 1.0) * np.exp(-t / (0.45 * sec))
+    air = _airflow(sr, sec, 0.7, "mouth", "a", voice, variant, inhale=False)[:, 0]
+    y = y * voicing / max(1e-12, float(np.sqrt(np.mean((y * voicing) ** 2))))
+    air = air / max(1e-12, float(np.sqrt(np.mean(air ** 2))))
+    # vzduch převáží jen na začátku („h“); HNR vzdechu ~10 dB = dyšný, ale znělý
+    out = (y + 0.3 * air[:n]) * _ramp(n, sr, 0.01, 0.2)
+    return _stereo(_edges(_ceiling(_level(out, "sigh")), sr))
+
+
+def _effort(sr, bpm, midi, beats, vowel, voice, variant):
+    """Námaha („hm!“, zvednutí, úder): tlačený hlas (Rd 0.35), rázové
+    nasazení, hrubost (jitter, shimmer, zdvojení periody), výška padá."""
+    _check_voice(voice, vowel)
+    rng = _rng(47, variant)
+    n = max(64, int(float(beats) * 60.0 / float(bpm) * sr))
+    m = float(midi)
+    pitch = pitch_curve(n, sr, [(0.0, m + 1.0), (0.2, m), (1.0, m - 3.0)], rng,
+                        drift=15.0, fine=6.0, settle=False)
+    y = _voiced(sr, pitch, rng, voice, vowel, rd=0.35, aspiration=0.1,
+                jitter=0.025, shimmer=0.08, doubling=rng.uniform(0.2, 0.35))
+    t = np.arange(n) / sr
+    env = np.minimum(1.0, t / 0.004) * (1.0 - 0.4 * np.clip(t / (0.6 * n / sr), 0.0, 1.0))
+    y = y * env * _ramp(n, sr, 0.0, 0.06)
+    return _stereo(_edges(_ceiling(_level(y, "effort")), sr, 0.001))
+
+
+def _laugh(sr, bpm, midi, calls, rate, vowel, voice, variant):
+    """Smích: série „ha“ (`calls` za sebou, `rate` za sekundu), každé
+    s přídechem „h“; výška i síla během série klesají, hlas dyšní."""
+    _check_voice(voice, vowel)
+    calls = max(1, int(calls))
+    rate = float(np.clip(rate, 2.0, 8.0))
+    rng = _rng(53, variant)
+    period = 1.0 / rate
+    starts = np.cumsum(np.r_[0.0, period * (1.0 + 0.08 * rng.standard_normal(calls - 1))])
+    sec = float(starts[-1]) + period + 0.12
+    n = int(sec * sr)
+    t = np.arange(n) / sr
+    m = float(midi)
+    points = []
+    for i, s0 in enumerate(starts):
+        top = m - 0.7 * i
+        points += [(s0 / sec, top + 0.4), (min(1.0, (s0 + 0.09) / sec), top - 1.0)]
+    points.sort()
+    pitch = pitch_curve(n, sr, points, rng, drift=10.0, settle=False)
+    gate = np.zeros(n)
+    breath_gate = np.zeros(n)
+    for i, s0 in enumerate(starts):
+        v_len = 0.09 * rng.uniform(0.85, 1.15)
+        on = s0 + 0.035
+        w = np.clip((t - on) / v_len, 0.0, 1.0)
+        call = np.where((t >= on) & (t < on + v_len), np.sin(np.pi * w) ** 0.6, 0.0)
+        gate += call * 0.85 ** i
+        h = np.clip((t - s0) / 0.035, 0.0, 1.0)
+        breath_gate += np.where((t >= s0) & (t < on + 0.02), np.sin(np.pi * h) ** 2, 0.0) * 0.85 ** i
+    rd = np.linspace(1.2, 1.9, n)
+    y = _voiced(sr, pitch, rng, voice, vowel, rd=rd, aspiration=0.15) * gate
+    noise = dsp.cascade(rng.standard_normal(n), [(f, b * 3.0) for f, b in
+                        zip(FORMANTS["tenor"][vowel][0][:4], FORMANTS["tenor"][vowel][2][:4])], sr)
+    noise = noise / max(1e-12, float(np.sqrt(np.mean(noise ** 2)))) * breath_gate
+    y = y / max(1e-12, float(np.sqrt(np.mean(y ** 2)))) + 0.4 * noise
+    return _stereo(_edges(_ceiling(_level(y, "laugh")), sr))
+
+
 GENERATORS = {
     "breath": _breath,
     "exhale": _exhale,
@@ -513,4 +663,8 @@ GENERATORS = {
     "heartbeat": _heartbeat,
     "cloth": _cloth,
     "step": _step,
+    "hum": _hum,
+    "sigh": _sigh,
+    "effort": _effort,
+    "laugh": _laugh,
 }

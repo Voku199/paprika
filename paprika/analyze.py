@@ -138,7 +138,8 @@ SILENT_BAR_DB = -80.0     # takt tišší než tohle se do maskování nepočít
 MASKING_SHOWN = 4         # kolik nejdelších překryvů report vypíše jako WARN
 
 
-BREATH_GESTURES = frozenset({"breath", "exhale", "lip_smack"})
+BREATH_GESTURES = frozenset({"breath", "exhale", "lip_smack", "sigh", "effort", "laugh"})
+STERILE_JITTER = 0.0005  # Glottal bez jitteru a shimmeru zní jako stroj
 
 
 def _gestures_only(t) -> bool:
@@ -256,16 +257,20 @@ def _breathing(song: Song, warns: list) -> None:
         if perf is not None and not t.section:
             notes = perf.all_notes()
             shown = 0
-            for b in breaths:
+            gestures = sorted((h for h in t.hits
+                               if h.name == "breath" or h.name in _human.VOICE_GESTURES),
+                              key=lambda h: h.start_beat)
+            for b in gestures:
                 lo, hi = b.start_beat, b.start_beat + b.dur_beats
                 if any(n.start_beat < hi - BREATH_EPS
                        and n.start_beat + n.dur_beats > lo + BREATH_EPS for n in notes):
-                    bar = _bar_of(song, hi)
+                    bar = _bar_of(song, hi if b.name == "breath" else lo)
+                    what = "nádech" if b.name == "breath" else f"hlasové gesto {b.name}"
                     warns.append(Warning_(
                         "WARN", t.name,
-                        f"bar {bar}   nádech jde přes noty stopy {perf.name} — "
-                        f"interpret nemůže dýchat a hrát zároveň; posuň ho do "
-                        f"pauzy nebo zkrať", bar))
+                        f"bar {bar}   {what} jde přes noty stopy {perf.name} — "
+                        f"interpret nemůže dýchat (hlasem dělat zvuk) a hrát "
+                        f"zároveň; posuň ho do pauzy nebo zkrať", bar))
                     shown += 1
                     if shown >= 3:
                         break
@@ -390,6 +395,27 @@ def _mono_compat(song: Song, stereo_buffers: dict, warns: list) -> None:
                 return
 
 
+def _sterile_voice(song: Song, warns: list) -> None:
+    """Hlasivky (`Glottal`) bez jitteru, shimmeru i modulace: periody jsou
+    strojově stejné (jitter 0 %, HNR přes 35 dB), lidský hlas má jitter
+    ~0.2–1 % a shimmer ~1–4 %."""
+    shown = 0
+    for t in song.tracks:
+        patch = getattr(t, "patch", None)
+        oscs = [o for o in getattr(patch, "osc", []) if type(o).__name__ == "Glottal"]
+        if not oscs or getattr(patch, "vibrato", None) or getattr(patch, "drift", 0):
+            continue
+        if all(o.jitter < STERILE_JITTER and o.shimmer < STERILE_JITTER for o in oscs):
+            warns.append(Warning_(
+                "WARN", t.name,
+                "sterilní hlas: Glottal bez jitteru a shimmeru a patch bez "
+                "vibrata i driftu — nech výchozí Glottal(jitter=0.008, "
+                "shimmer=0.025) nebo přidej drift"))
+            shown += 1
+            if shown >= 3:
+                return
+
+
 def _moving_patch(patch) -> bool:
     """Má patch něco, co zvuk hýbe v čase (modulace, round-robin, struna)?"""
     if getattr(patch, "sampled", False):
@@ -406,6 +432,8 @@ def _moving_patch(patch) -> bool:
             return True
         if type(o).__name__ in ("Pluck", "SuperSaw", "Additive"):
             return True
+        if type(o).__name__ == "Glottal" and (o.jitter or o.shimmer):
+            return True               # periody se mění samy (jitter, shimmer)
     return False
 
 
@@ -501,6 +529,7 @@ def warnings_for(song: Song, audio: np.ndarray, buffers: dict,
     _static_sound(song, warns)
     _sample_range(song, warns)
     _breathing(song, warns)
+    _sterile_voice(song, warns)
     _breath_level(song, buffers, warns)
     warns.extend(theory_warnings(song))
     warns.sort(key=lambda w: 0 if w.level == "WARN" else 1)
@@ -518,6 +547,7 @@ def model_warnings(song: Song) -> list:
     _static_sound(song, warns)
     _sample_range(song, warns)
     _breathing(song, warns)
+    _sterile_voice(song, warns)
     warns.extend(theory_warnings(song))
     warns.sort(key=lambda w: 0 if w.level == "WARN" else 1)
     return warns

@@ -7,7 +7,8 @@ syntetizuje nádechy s barvou skutečného zpěváka:
 
 1. **Hledání.** Před každým nasazením tónu (YIN, znělý úsek aspoň 0.15 s)
    se hledá šum nad hladinou místnosti, který skončí nejvýš `MAX_LEAD` s
-   před tónem. Kandidát projde kontrolou spektra: není to dunění (výkon pod
+   před tónem. Rámce s tónovým spektrem (doznívání předchozího tónu, které
+   YIN přehlédne) do nádechu nepatří. Kandidát projde kontrolou spektra: není to dunění (výkon pod
    150 Hz), cvak (crest), tón (spektrální plochost) ani sykavka.
 2. **Popis.** Nádech je šum, takže jeho realističnost je v časovém průběhu
    spektrální obálky, ne v jemné struktuře. Každý nádech se popíše obálkou
@@ -63,6 +64,11 @@ MIN_CENTROID = 500.0   # Hz: tmavší je spíš ruch než dech
 MAX_CENTROID = 9000.0  # Hz: světlejší je sykavka nebo šum elektroniky
 MIN_FLATNESS = 0.05    # spektrální plochost 300 Hz–8 kHz: tón má méně
 MAX_CREST_DB = 22.0    # peak/RMS: cvak, mlasknutí, ťuknutí do mikrofonu
+# rámec (20 ms) s plochostí 300 Hz–8 kHz pod tímhle je tón, ne dech: YIN
+# doznívání tónu často nepozná a bez téhle kontroly začínal nádech ještě
+# v předchozím tónu (změřeno na VocalSet male3, 2026-10-23: 40–60 ms
+# s plochostí 0.00 a 86–96 % energie pod 500 Hz; nádechy mají 0.03–0.4)
+TONAL_FLAT = 0.02
 
 # --- popis a model ----------------------------------------------------------
 BANDS = 28             # mel pásma
@@ -115,6 +121,21 @@ def _close(mask: np.ndarray, gap: int) -> np.ndarray:
 def _dilate(mask: np.ndarray, k: int) -> np.ndarray:
     m = np.asarray(mask, dtype=np.float64)
     return np.convolve(m, np.ones(2 * k + 1), mode="same") > 0.5
+
+
+def _tonal(frames: np.ndarray, sr: int) -> np.ndarray:
+    """Které rámce mají tónové spektrum (harmonické, plochost < `TONAL_FLAT`)."""
+    out = np.zeros(frames.shape[0], dtype=bool)
+    if frames.size == 0:
+        return out
+    f = np.fft.rfftfreq(4096, 1.0 / sr)
+    band = (f >= 300.0) & (f <= 8000.0)
+    win = np.hanning(frames.shape[1])
+    for s in range(0, frames.shape[0], 256):        # po blocích kvůli paměti
+        p = np.abs(np.fft.rfft(frames[s:s + 256] * win, 4096, axis=1))[:, band] ** 2 + 1e-20
+        flat = np.exp(np.mean(np.log(p), axis=1)) / np.mean(p, axis=1)
+        out[s:s + 256] = flat < TONAL_FLAT
+    return out
 
 
 def _check(seg: np.ndarray, sr: int) -> tuple[str | None, dict]:
@@ -176,6 +197,8 @@ def find_breaths(x: np.ndarray, sr: int) -> tuple[list[Breath], Counter]:
     floor = float(np.percentile(quiet if quiet.size else rms_db, FLOOR_PCT))
     level = float(np.median(rms_db[sung]))
     active = (rms_db > floor + ABOVE_FLOOR_DB) & ~near
+    cand = np.flatnonzero(active)
+    active[cand[_tonal(frames[cand], sr)]] = False
 
     found: list[Breath] = []
     prev_end = 0

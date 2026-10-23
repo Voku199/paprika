@@ -749,6 +749,72 @@ class HumanTrack(SfxTrack):
             foot = 1 - foot
         return self
 
+    # -- hlas -------------------------------------------------------------
+    def _pitch(self, pitch, beat: float, gesture: str) -> float:
+        """Výška gesta: `"chord"` = tón akordu plánu nejblíž pohodlné výšce
+        hlasu (bez plánu tónika tóniny), jinak jméno noty nebo MIDI."""
+        if pitch is None or pitch == "chord":
+            center = _human.GESTURE_CENTER[gesture][self.voice]
+            span = self.song.chord_at(beat)
+            pcs = (set(span.chord.pcs) if span is not None and span.chord is not None
+                   else {theory._root_pc(self.song.key)})
+            cands = [m for m in range(center - 7, center + 8) if m % 12 in pcs]
+            return float(min(cands, key=lambda m: (abs(m - center), m)))
+        if isinstance(pitch, str):
+            return float(theory.pitch(pitch))
+        return float(pitch)
+
+    def _gesture_beats(self, beats, gesture: str) -> float:
+        b = self._beats(_human.GESTURE_SEC[gesture]) if beats is None else float(beats)
+        if b <= 0:
+            raise ValueError(f"{gesture}: beats musí být kladné")
+        return b
+
+    def hum(self, bar: float, beat: float = 0.0, beats: float | None = None,
+            pitch="chord", vel: int = 80, variant: int | None = None):
+        """Bručení „mmm“ se zavřenými rty od `bar` + `beat`. `pitch="chord"`
+        vezme tón akordu plánu blízko pohodlné výšky hlasu; jinak jméno
+        noty nebo MIDI. Výchozí délka 1.5 s."""
+        at = self._bar_to_beat(bar) + float(beat)
+        beats = self._gesture_beats(beats, "hum")
+        return self._put("hum", at, vel, (self._pitch(pitch, at, "hum"), beats, self.voice,
+                                          self._variant("hum", variant)), beats)
+
+    def sigh(self, bar: float, beat: float = 0.0, beats: float | None = None,
+             pitch="chord", drop: float = 5.0, inhale: bool = True, vel: int = 90,
+             variant: int | None = None):
+        """Vzdech s hlasem od `bar` + `beat`: dyšný hlas padá o `drop`
+        půltónů z tónu akordu. `inhale=True` před něj dá hluboký nádech,
+        který skončí přesně v místě vzdechu."""
+        at = self._bar_to_beat(bar) + float(beat)
+        if inhale:
+            self.breath(bar, beat=beat, depth=0.8, vel=max(1, vel - 10))
+        beats = self._gesture_beats(beats, "sigh")
+        return self._put("sigh", at, vel, (self._pitch(pitch, at, "sigh"), float(drop), beats,
+                                           self.voice, self._variant("sigh", variant)), beats)
+
+    def effort(self, bar: float, beat: float = 0.0, beats: float | None = None,
+               pitch="chord", vowel: str = "a", vel: int = 100, variant: int | None = None):
+        """Zvuk námahy („hm!“ při zvednutí, úderu): tlačený, hrubý hlas
+        s rázovým nasazením. Výchozí délka 0.3 s."""
+        at = self._bar_to_beat(bar) + float(beat)
+        beats = self._gesture_beats(beats, "effort")
+        return self._put("effort", at, vel, (self._pitch(pitch, at, "effort"), beats,
+                                             self._vowel(vowel), self.voice,
+                                             self._variant("effort", variant)), beats)
+
+    def laugh(self, bar: float, beat: float = 0.0, calls: int = 5, rate: float = 4.5,
+              pitch="chord", vowel: str = "a", vel: int = 90, variant: int | None = None):
+        """Smích: `calls` krát „ha“ (`rate` za sekundu) od `bar` + `beat`;
+        výška začne u tónu akordu nad mluvenou výškou a během série klesá."""
+        if int(calls) < 1:
+            raise ValueError("laugh: calls musí být aspoň 1")
+        at = self._bar_to_beat(bar) + float(beat)
+        beats = self._beats(int(calls) / float(rate) + 0.12)
+        return self._put("laugh", at, vel, (self._pitch(pitch, at, "laugh"), int(calls),
+                                            float(rate), self._vowel(vowel), self.voice,
+                                            self._variant("laugh", variant)), beats)
+
     def humanize(self, timing: float | None = None, vel: float = 0.1,
                  seed: int | None = None, corr: float = 0.6):
         """Rozhýbe časování i dynamiku (dech nesedí na mřížce). Výchozí

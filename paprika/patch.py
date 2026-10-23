@@ -17,15 +17,15 @@ import numpy as np
 from scipy import signal
 
 from . import dsp
-from .filters import BP, HP, LP, Formant, onepole_hp, onepole_lp
+from .filters import BP, HP, LP, Formant, Tract, onepole_hp, onepole_lp
 from .modulation import LFO, Ensemble, PitchEnv
-from .oscillators import (FM, Additive, Noise, Osc, Pluck, Pulse, Saw, Sine,
-                          Square, SuperSaw, Tri)
+from .oscillators import (FM, Additive, Glottal, Noise, Osc, Pluck, Pulse, Saw,
+                          Sine, Square, SuperSaw, Tri)
 
 __all__ = [
     "Osc", "Sine", "Saw", "Square", "Tri", "Noise", "FM",
-    "SuperSaw", "Pulse", "Pluck", "Additive",
-    "ADSR", "LP", "HP", "BP", "Formant", "LFO", "PitchEnv", "Ensemble",
+    "SuperSaw", "Pulse", "Pluck", "Additive", "Glottal",
+    "ADSR", "LP", "HP", "BP", "Formant", "Tract", "LFO", "PitchEnv", "Ensemble",
     "Patch", "midi_to_freq", "onepole_lp", "onepole_hp",
 ]
 

@@ -10,9 +10,9 @@ Některé mají doporučené výchozí nastavení stopy (`PRESET_DEFAULTS`, nap�
 
 from __future__ import annotations
 
-from .patch import (ADSR, BP, FM, LFO, LP, Additive, Ensemble, Formant, Noise,
-                    Patch, PitchEnv, Pluck, Pulse, Saw, Sine, Square, SuperSaw,
-                    Tri)
+from .patch import (ADSR, BP, FM, LFO, LP, Additive, Ensemble, Formant, Glottal,
+                    Noise, Patch, PitchEnv, Pluck, Pulse, Saw, Sine, Square,
+                    SuperSaw, Tract, Tri)
 
 __all__ = ["PRESETS", "PRESET_TAGS", "PRESET_DEFAULTS", "preset", "preset_names",
            "preset_fx", "presets_by_tag", "tag_names"]
@@ -197,6 +197,9 @@ def _timpani_tone() -> Patch:
 # choir
 # --------------------------------------------------------------------------
 
+CHOIR_TRACT_GAIN = 0.24
+
+
 def _choir(vowel: str, name: str, extra_lp: float | None = None,
            gain: float = 1.0) -> Patch:
     filters = [Formant(vowel, gain=3.0)]
@@ -223,6 +226,18 @@ def _choir_aah() -> Patch:
 def _choir_mm() -> Patch:
     # zavřená ústa: „u“ a navíc zatemnit
     return _choir("u", "choir_mm", extra_lp=1200)
+
+
+def _choir_tract() -> Patch:
+    """Sbor z hlasivek a traktu: LF puls s jitterem a shimmerem, trubice „u“
+    s délkou podle výšky noty, každý zpěvák sekce jiný jitter i formanty."""
+    return Patch(
+        osc=[Glottal(rd=1.3, aspiration=0.1)],
+        adsr=ADSR(0.35, 0.5, 0.9, 1.1),
+        filter=Tract("u", vary=0.03, norm=True, gain=1.0),
+        vibrato=LFO(5.2, 0.12, delay=0.25), drift=5.0, rr=3,
+        ensemble=Ensemble(5, 12.0, 0.9, 0.04),
+        gain=CHOIR_TRACT_GAIN, name="choir_tract")
 
 
 def _vox_chop() -> Patch:
@@ -411,6 +426,7 @@ PRESETS = {
     "choir_aah": _choir_aah,
     "choir_mm": _choir_mm,
     "vox_chop": _vox_chop,
+    "choir_tract": _choir_tract,
     # keys
     "felt_piano": _felt_piano,
     "toy_piano": _toy_piano,
@@ -439,7 +455,7 @@ _TAGGED = {
                 "organ"),
     "orchestral": ("strings_ens", "strings_short", "pizz", "cello_solo",
                    "brass_section", "horn_swell", "harp", "timpani_tone"),
-    "choir": ("choir_ooh", "choir_aah", "choir_mm", "vox_chop"),
+    "choir": ("choir_ooh", "choir_aah", "choir_mm", "choir_tract", "vox_chop"),
     "keys": ("felt_piano", "toy_piano", "music_box", "celesta"),
     "darkpop": ("808", "reese", "dark_pluck", "detuned_lead"),
     "electronic": ("supersaw", "acid", "string_stab", "pwm_pad", "air_pad"),
@@ -473,6 +489,7 @@ def _default_fx(name: str) -> list:
         "choir_ooh": lambda: [Hall("cathedral", mix=0.35)],
         "choir_aah": lambda: [Hall("cathedral", mix=0.35)],
         "choir_mm": lambda: [Hall("hall", mix=0.3)],
+        "choir_tract": lambda: [Hall("cathedral", mix=0.35)],
         "felt_piano": lambda: [Hall("room", mix=0.25)],
         "lofi_keys": lambda: [Tape(0.5, 0.3, 1.3, 0.3), BitCrush(12, 2, 0.4)],
         "glass_pad": lambda: [Hall("cathedral", mix=0.35)],

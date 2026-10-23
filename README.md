@@ -73,7 +73,8 @@ vyrenderované přesně z nich, bez jakékoliv úpravy v jiném programu.
 - **Mix jako v DAW.** Konvoluční hall, delay, EQ, kompresor, sidechain,
   sběrnice, automatizace čehokoliv v čase, hotové master řetězy.
 - **Lidské zvuky.** Nádechy sólisty podle frází (z nahrávek skutečných
-  zpěváků nebo z fyziky proudu vzduchu), mlasknutí, tep, šustění oblečení
+  zpěváků nebo z fyziky proudu vzduchu), bručení, vzdech, smích a námaha
+  z modelu hlasivek a hlasového traktu, mlasknutí, tep, šustění oblečení
   a kroky, blízký mikrofon s proximity efektem a šumem místnosti. Report
   hlídá, že nádech nejde přes noty a fráze se vejde do jednoho nádechu.
 - **MIDI export** do jakékoliv DAW, když budeš chtít skladbu dodělat jinde.
@@ -386,10 +387,13 @@ v d moll je v pořádku i bez `chromatic=True`.
 | kulometný efekt | dva stejné lidské zvuky za sebou mají stejnou variantu |
 | dech na mřížce (INFO) | 4+ nádechy, všechny se stejným odstupem od mřížky — chybí humanize |
 | hlasitý nádech (INFO) | nádech je méně než 12 dB pod frází po něm (přirozeně 15–30 dB) |
+| sterilní hlas | `Glottal` bez jitteru a shimmeru v patchi bez vibrata i driftu (lidský hlas: jitter 0.2–1 %, shimmer 1–4 %) |
 
-Maskování přeskakuje stopy jen s gesty dechu (nádech, výdech, mlasknutí) —
-zní zlomek taktu o desítky dB tišeji, jejich hlasitost hlídá pravidlo
-hlasitého nádechu.
+„Nádech přes noty“ platí i pro hlasová gesta (bručení, vzdech, smích,
+námaha) — jeden interpret nemůže zpívat a zároveň bručet. Maskování
+přeskakuje stopy jen s krátkými gesty (nádech, výdech, mlasknutí, vzdech,
+smích, námaha) — zní zlomek taktu o desítky dB tišeji, jejich hlasitost
+hlídá pravidlo hlasitého nádechu.
 
 `compare` vypíše stejné metriky pro render a referenční nahrávku vedle sebe:
 
@@ -526,9 +530,44 @@ python -m paprika samples breaths --rebuild                 # znovu prohledá na
 
 Statistiky ukazují délky nádechů, jejich hlasitost pod zpěvem, těžiště
 spektra korpusu a syntézy a odchylku syntézy od korpusu (LSD a obálka
-v dB, dobré je pod ~2 dB). Fyzika, čísla a zdroje jsou
-v [`docs/superpowers/research/2026-10-23-lidske-zvuky-pruzkum.md`](docs/superpowers/research/2026-10-23-lidske-zvuky-pruzkum.md),
-`songs/dech.py` je poslechová ukázka.
+v dB, dobré je pod ~2 dB). Fyzikální dech (bez modelu) je zkalibrovaný na
+skutečné nádechy VocalSet: těžiště 2.2–2.4 kHz, hlavní energie 1–2 kHz.
+
+### Hlas: bručení, vzdech, smích, námaha
+
+Znělá gesta jdou přes model hlasivek a traktu, ne přes nahrávky: puls toku
+glotis (LF model, parametr Rd od tlačeného po dyšný hlas) s jitterem,
+shimmerem a aspiračním šumem modulovaným tokem, potom trakt jako trubice
+(plochy průřezu -> formanty -> kaskáda rezonátorů). Výška má přestřel po
+změně tónu, pomalé bloudění a jemné chvění, takže nezní jako sinusovka.
+`pitch="chord"` (výchozí) vezme tón akordu harmonického plánu nejblíž
+pohodlné výšce hlasu.
+
+```python
+s.harmony("i | VI | iv | V")
+hlas = s.human("hlas", voice="female", vol=1.0)
+hlas.hum(0, beat=0.5, beats=3)        # „mmm“ na tónu akordu (Dm -> A3)
+hlas.sigh(1, beat=1)                  # nádech + dyšný vzdech o 5 půltónů dolů
+hlas.laugh(2, calls=5)                # „ha ha ha“, výška i síla klesají
+hlas.effort(3).effort(3, beat=2)      # tlačený hrubý hlas s rázovým nasazením
+```
+
+| Metoda | Co dělá |
+|---|---|
+| `.hum(bar, beat, beats, pitch="chord")` | bručení se zavřenými rty (nosní murmur), měkký nástup zdola |
+| `.sigh(bar, beat, beats, pitch, drop=5, inhale=True)` | vzdech s hlasem: „h“, dyšný hlas padá o `drop` půltónů, čelist se přivírá; `inhale` přidá nádech před ním |
+| `.effort(bar, beat, beats, pitch, vowel)` | námaha: tlačený hlas (Rd 0.35), zdvojení periody, výška padá |
+| `.laugh(bar, beat, calls=5, rate=4.5, pitch, vowel)` | smích: `calls` krát „ha“, každé s přídechem |
+
+Stavební bloky jdou použít i v nástroji: `Glottal(rd, jitter, shimmer,
+aspiration)` je oscilátor hlasivek, `Tract(vowel, voice, morph, nasal,
+vary, norm)` filtr traktu. Preset `choir_tract` je sbor z nich (každý zpěvák
+sekce má jiný jitter i formanty). `voices.voice_quality(x, sr)` změří
+jitter, shimmer a HNR — AI tak pozná sterilní hlas bez poslechu.
+
+Fyzika, čísla a zdroje jsou
+v [`docs/superpowers/research/2026-10-23-lidske-zvuky-pruzkum.md`](docs/superpowers/research/2026-10-23-lidske-zvuky-pruzkum.md);
+`songs/dech.py` a `songs/hlas.py` jsou poslechové ukázky.
 
 ## Syntéza
 
@@ -539,7 +578,7 @@ na pady, basy, atmosféru a elektroniku pod orchestrem
 | Tag | Presety |
 |---|---|
 | orchestral | `strings_ens`, `strings_short`, `pizz`, `cello_solo`, `brass_section`, `horn_swell`, `harp`, `timpani_tone` |
-| choir | `choir_ooh`, `choir_aah`, `choir_mm`, `vox_chop` |
+| choir | `choir_ooh`, `choir_aah`, `choir_mm`, `choir_tract`, `vox_chop` |
 | keys | `felt_piano`, `toy_piano`, `music_box`, `celesta` |
 | classic | `epiano`, `warmpad`, `subbass`, `pluck`, `lead`, `strings`, `bell`, `organ` |
 | darkpop | `808`, `reese`, `dark_pluck`, `detuned_lead` |
@@ -559,9 +598,11 @@ moje = s.track(Patch(
 ```
 
 Oscilátory `Sine`, `Saw`, `Square`, `Tri`, `Noise`, `FM`, `SuperSaw`,
-`Pulse`, `Pluck` (Karplus-Strong), `Additive`; filtry `LP`, `HP`, `BP`,
-`Formant` (samohlásky pro sbor); modulace `LFO`, `PitchEnv`, `Ensemble`
-(sekce místo sólisty).
+`Pulse`, `Pluck` (Karplus-Strong), `Additive`, `Glottal` (hlasivky, LF
+model); filtry `LP`, `HP`, `BP`, `Formant` (samohlásky pro sbor;
+`mode="cascade"` řadí rezonátory za sebe, `vary` posune formanty mezi
+notami), `Tract` (hlasový trakt jako trubice); modulace `LFO`, `PitchEnv`,
+`Ensemble` (sekce místo sólisty).
 
 Bicí: `s.drums(kit="cinematic")` s patterny jako `"b.......b...b.b."`
 (`k` kick, `s` snare, `h` hi-hat, `b` taiko, …; velké písmeno = akcent).
@@ -593,7 +634,7 @@ paprika/
   midi.py         MIDI export a čtení
   viz.py  cli.py  ASCII výstup a příkazová řádka
 examples/         pět ukázek z tohoto README
-songs/            delší skladby (v2_showcase, divadlo, romantic, dech)
+songs/            delší skladby (v2_showcase, divadlo, romantic, dech, hlas)
 tools/            readme_media.py — obrázky a MP3 pro README
 ```
 
@@ -605,7 +646,7 @@ v [`docs/superpowers/specs/`](docs/superpowers/specs/).
 ## Testy
 
 ```bash
-python -m pytest tests/                                     # ~590 testů, bez sítě
+python -m pytest tests/                                     # ~620 testů, bez sítě
 python -m unittest discover tests                           # bez pytestu
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py        # vyrenderuje všechny songy
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # nainstalované nahrávky

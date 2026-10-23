@@ -32,8 +32,14 @@ backend is tested. H2 was built on synthetic recordings
 (zenodo.org was blocked in the cloud session); 10 real breaths from the
 user's `samples breaths --examples` then calibrated the physics breath
 (centroid 2.2–2.4 kHz) and exposed note tails YIN misses (now excluded by
-`breath.TONAL_FLAT`). The `samples breaths` stats text from the real corpus
-has not been seen yet — few singers reached `MIN_BREATHS`, cause unknown.
+`breath.TONAL_FLAT`). The full VocalSet run (2026-10-23, zenodo reachable)
+explained why few singers had models: the studio noise is mostly rumble
+below 150 Hz, so broadband breaths sat only 3–8 dB above the floor (66
+breaths in 1485 files, 3 singer models). Detection in `DETECT_BAND`
+(300 Hz–16 kHz) plus room-noise subtraction gives 208 breaths and 11
+singer models (LSD 0.9–2.0 dB); the rest of the singers' breaths are
+genuinely near-silent in the recordings. `install.VOCALSET_SIZE` was wrong
+until then (every install failed the size check).
 
 The library is *not* a music generator — melody, harmony and structure are
 written by the author (usually the AI). Paprika supplies theory, synthesis, FX,
@@ -169,9 +175,13 @@ Layer boundaries are deliberately sharp — keep them:
   matching consecutive periods (tests use it to keep `Glottal` and the gestures
   in human ranges; the sterile-voice rule itself checks `Glottal` params, no audio).
 - `breath.py` — VocalSet breaths -> model: before every sung onset (YIN run
-  ≥ 0.15 s) find noise above the room floor ending ≤ 0.4 s before it, reject
-  rumble/click/tone/hiss by spectrum, describe each breath as loudness contour
-  + 28-band mel shape (area-normalized bank) on 24 normalized time points,
+  ≥ 0.15 s) find noise above the room floor (measured in `DETECT_BAND`,
+  300 Hz–16 kHz) ending ≤ 0.4 s before it; the file's room-noise spectrum
+  from its quietest runs (`_noise`) is subtracted in `_check` (Welch) and per
+  mel band in `describe`; reject rumble/click/tone/hiss by spectrum,
+  describe each breath as loudness contour + 28-band mel shape
+  (area-normalized bank, local spectra averaged in power, not dB) on 24
+  normalized time points,
   PCA per singer (≥ 8 breaths) and pooled `male`/`female` ->
   `vocalset/breath/models.json`; STFT noise synthesis from a sampled vector.
   `_verify` stores LSD / envelope / centroid of synthesis vs corpus. Built by

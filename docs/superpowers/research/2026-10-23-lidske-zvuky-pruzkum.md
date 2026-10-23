@@ -37,9 +37,28 @@ energii v 1–2 kHz u obou pohlaví, fyzikální dech z H1 byl o 1.5 kHz
 jasnější — jas, šířky formantů a přední turbulence jsou podle nich
 překalibrované (chyba v pásmech 11.5 -> 4.7 dB); (2) dva nádechy male3
 začínaly 40–60 ms doznívání předchozího tónu, které YIN přehlédl —
-hledání teď vyřazuje rámce s tónovým spektrem (`TONAL_FLAT`). Vlastní
-model dostali jen tři zpěváci; proč u ostatních hledání selhává, ukáže až
-textový výpis `samples breaths` (důvody odmítnutí).
+hledání teď vyřazuje rámce s tónovým spektrem (`TONAL_FLAT`).
+
+**Celý VocalSet (2026-10-23, zenodo.org už dostupné):** starý detektor
+našel 66 nádechů v 1485 souborech (odmítnuto „bez nádechu“ 5803, „krátký“
+809) a vlastní model měli jen female7, female8 a male3. Příčina: hluk
+studia je hlavně dunění pod 150 Hz (na 41 souborech o 14–25 dB na bin
+silnější než v 150 Hz–8 kHz), nádechy jsou nad hlukem o 20–30 dB v pásmu
+150 Hz–8 kHz, ale jen o ~8 dB pod 150 Hz — širokopásmově tedy stály jen
+3–8 dB nad hladinou a práh +8 dB je neviděl. Oprava: hledání v pásmu
+300 Hz–16 kHz (pásmo 1–8 kHz dalo podobný počet, ale víc dunění a horší
+shodu syntézy), odečtení spektra šumu místnosti z nejtišších úseků
+souboru (v `_check` i po mel pásmech v `describe`) a průměrování tvaru
+spektra ve výkonu místo v dB. Výsledek: 208 nádechů, vlastní model má
+11 zpěváků (female3, 5, 6, 7, 8, male3, 4, 5, 6, 9, 11), LSD syntézy
+0.9–2.0 dB (dřív 2.2–3.4), těžiště korpusu a syntézy se v pásmu
+150 Hz–16 kHz shodují (1.4–2.4 kHz, souhrnně ~1.9 kHz; nad 16 kHz zbývá
+po odečtení jen šum elektroniky, který těžiště korpusu dřív zvedal
+o ~450 Hz). Nádechy jsou 33–57 dB pod zpěvem; u female1, 2, 4, 9 a male1,
+2, 7, 8, 10 v nahrávkách skoro nejsou (female1 má navíc stálý šum
+300 Hz–1 kHz). Fyzikální dech z H1 má těžiště ~2.4 kHz, tedy na jasném
+konci korpusu. Při ověřování se ukázalo, že `install.VOCALSET_SIZE` byla
+špatně a instalace hlasů vždy skončila chybou velikosti.
 **Navazuje na:** `research/2026-10-21-ai-engine-pruzkum.md` (§4 hlasy, §5.3
 výraz), `specs/2026-09-23-realism-pass-design.md`, `paprika/sfx.py`,
 `paprika/voices.py`

@@ -503,9 +503,11 @@ konkrétní variantu (je jich 8).
 
 S nainstalovaným VocalSetem (`samples install voices`) bere nádech barvu
 a průběh ze skutečných nádechů zpěváků. Instalace je najde v nahrávkách
-(šum nad hladinou místnosti těsně před nasazením tónu, bez dunění, cvaků
-a tónu), popíše obálkou hlasitosti a tvarem spektra v 28 mel pásmech
-a spočítá model (PCA) pro každého zpěváka a souhrnně pro muže a ženy.
+(šum nad hladinou místnosti těsně před nasazením tónu, hledaný nad 300 Hz,
+protože hluk studia je hlavně dunění; bez cvaků a tónu), od spektra odečte
+šum místnosti změřený v tichých místech souboru, popíše obálkou hlasitosti
+a tvarem spektra v 28 mel pásmech a spočítá model (PCA) pro každého
+zpěváka a souhrnně pro muže a ženy.
 Syntéza z modelu dá pokaždé jiný nádech libovolné délky; hlasitost a jas
 dál řídí fyzika proudu.
 
@@ -521,7 +523,10 @@ s.human(performer=sop, breath_model=None)  # fyzikální dech
 sbory → souhrnný `male`/`female`), u ostatních nástrojů zůstane fyzika;
 jméno zpěváka, nástroje nebo `male`/`female` model vynutí. Zpěvák s méně
 než 8 nalezenými nádechy dostane souhrnný model své skupiny, `nose`
-zůstává fyzikální. Chybí-li model, letí `SamplesMissing` s příkazem
+zůstává fyzikální. Ve VocalSetu jsou nádechy tiché (33–57 dB pod zpěvem)
+a u řady zpěváků v nahrávce skoro nejsou: z 1485 souborů jich vyjde 208
+a vlastní model má 11 z 20 zpěváků (female3, 5, 6, 7, 8, male3, 4, 5, 6,
+9, 11) — `alto` a `tenor` tedy svůj, `soprano` a `basso` souhrnný. Chybí-li model, letí `SamplesMissing` s příkazem
 instalace — žádný tichý návrat k syntéze.
 
 ```bash
@@ -531,9 +536,11 @@ python -m paprika samples breaths --rebuild                 # znovu prohledá na
 ```
 
 Statistiky ukazují délky nádechů, jejich hlasitost pod zpěvem, těžiště
-spektra korpusu a syntézy a odchylku syntézy od korpusu (LSD a obálka
-v dB, dobré je pod ~2 dB). Fyzikální dech (bez modelu) je zkalibrovaný na
-skutečné nádechy VocalSet: těžiště 2.2–2.4 kHz, hlavní energie 1–2 kHz.
+spektra korpusu a syntézy (150 Hz–16 kHz) a odchylku syntézy od korpusu
+(LSD a obálka v dB, dobré je pod ~2 dB; u VocalSetu vychází 0.9–2.0 dB).
+Těžiště nádechů VocalSet je 1.4–2.4 kHz (souhrnně ~1.9 kHz), hlavní
+energie 1–2 kHz; fyzikální dech (bez modelu) má ~2.4 kHz, je tedy na
+jasnějším konci.
 
 ### Hlas: bručení, vzdech, smích, námaha
 

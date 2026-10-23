@@ -568,6 +568,7 @@ class HumanTrack(SfxTrack):
                              f"{', '.join(_human.HUMAN_VOICES)}")
         self.seed = int(seed)
         self.section = bool(section)
+        self.credits: dict = {}        # id klipu z korpusu -> licence a atribuce
         self.breath_model = None
         if breath_model is not None:
             from . import breath as _breath
@@ -754,15 +755,56 @@ class HumanTrack(SfxTrack):
         """Výška gesta: `"chord"` = tón akordu plánu nejblíž pohodlné výšce
         hlasu (bez plánu tónika tóniny), jinak jméno noty nebo MIDI."""
         if pitch is None or pitch == "chord":
-            center = _human.GESTURE_CENTER[gesture][self.voice]
-            span = self.song.chord_at(beat)
-            pcs = (set(span.chord.pcs) if span is not None and span.chord is not None
-                   else {theory._root_pc(self.song.key)})
-            cands = [m for m in range(center - 7, center + 8) if m % 12 in pcs]
-            return float(min(cands, key=lambda m: (abs(m - center), m)))
+            return self._near_chord(beat, _human.GESTURE_CENTER[gesture][self.voice])
         if isinstance(pitch, str):
             return float(theory.pitch(pitch))
         return float(pitch)
+
+    def _near_chord(self, beat: float, center: float) -> float:
+        """Tón akordu plánu v `beat` nejblíž `center` (bez plánu tónika)."""
+        span = self.song.chord_at(beat)
+        pcs = (set(span.chord.pcs) if span is not None and span.chord is not None
+               else {theory._root_pc(self.song.key)})
+        c = int(round(center))
+        cands = [m for m in range(c - 7, c + 8) if m % 12 in pcs]
+        return float(min(cands, key=lambda m: (abs(m - center), m)))
+
+    def clip(self, kind: str, bar: float, beat: float = 0.0, pitch=None,
+             beats: float | None = None, vel: int = 90, variant: int | None = None):
+        """Klip z korpusu lidských zvuků (smích, kašel, lapání po dechu,
+        šustění, kroky ... vygenerované neuronovým modelem nebo nahrané).
+
+        Po sobě jdoucí volání berou různé klipy daného druhu. `pitch="chord"`
+        posune znělý klip (PSOLA, formanty zůstanou) na tón akordu nejblíž
+        jeho vlastní výšce, jméno noty nebo MIDI ho posune tam (nejvýš o
+        6 půltónů). `beats` klip zkrátí. Prázdný korpus -> `SamplesMissing`
+        s postupem, jak ho naplnit. Licence použitých klipů vypíše report.
+        """
+        from . import corpus as _corpus
+        if pitch is not None and kind not in _corpus.VOCAL_KINDS:
+            raise ValueError(f"clip: pitch jde jen u hlasových druhů "
+                             f"({', '.join(_corpus.VOCAL_KINDS)}), ne {kind!r}")
+        entries = _corpus.clips(kind)
+        if variant is None:
+            used = sum(1 for h in self.hits if h.name == "clip" and h.params[0] == kind)
+            idx = (self.seed * 5 + used) % len(entries)
+        else:
+            idx = int(variant) % len(entries)
+        e = entries[idx]
+        at = self._bar_to_beat(bar) + float(beat)
+        midi = None
+        if pitch is not None and e.get("pitch") is not None:
+            midi = (self._near_chord(at, float(e["pitch"])) if pitch == "chord"
+                    else float(theory.pitch(pitch)) if isinstance(pitch, str) else float(pitch))
+        length = self._beats(e["dur"])
+        if beats is not None:
+            if float(beats) <= 0:
+                raise ValueError("clip: beats musí být kladné")
+            length = min(length, float(beats))
+        self.credits[e["id"]] = _corpus.credit_line(e)
+        return self._put("clip", at, vel, (kind, e["id"], midi,
+                                           float(beats) if beats is not None else None,
+                                           idx), length)
 
     def _gesture_beats(self, beats, gesture: str) -> float:
         b = self._beats(_human.GESTURE_SEC[gesture]) if beats is None else float(beats)

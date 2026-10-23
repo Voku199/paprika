@@ -388,11 +388,13 @@ v d moll je v pořádku i bez `chromatic=True`.
 | dech na mřížce (INFO) | 4+ nádechy, všechny se stejným odstupem od mřížky — chybí humanize |
 | hlasitý nádech (INFO) | nádech je méně než 12 dB pod frází po něm (přirozeně 15–30 dB) |
 | sterilní hlas | `Glottal` bez jitteru a shimmeru v patchi bez vibrata i driftu (lidský hlas: jitter 0.2–1 %, shimmer 1–4 %) |
+| klipy z korpusu (INFO) | skladba používá `clip()` — vypíše licence a autory klipů k atribuci |
 
 „Nádech přes noty“ platí i pro hlasová gesta (bručení, vzdech, smích,
-námaha) — jeden interpret nemůže zpívat a zároveň bručet. Maskování
-přeskakuje stopy jen s krátkými gesty (nádech, výdech, mlasknutí, vzdech,
-smích, námaha) — zní zlomek taktu o desítky dB tišeji, jejich hlasitost
+námaha) a hlasové klipy z korpusu (smích, kašel, lapání po dechu, ...) —
+jeden interpret nemůže zpívat a zároveň bručet. Maskování přeskakuje stopy
+jen s krátkými gesty (nádech, výdech, mlasknutí, vzdech, smích, námaha
+a jejich klipy) — zní zlomek taktu o desítky dB tišeji, jejich hlasitost
 hlídá pravidlo hlasitého nádechu.
 
 `compare` vypíše stejné metriky pro render a referenční nahrávku vedle sebe:
@@ -565,6 +567,47 @@ vary, norm)` filtr traktu. Preset `choir_tract` je sbor z nich (každý zpěvák
 sekce má jiný jitter i formanty). `voices.voice_quality(x, sr)` změří
 jitter, shimmer a HNR — AI tak pozná sterilní hlas bez poslechu.
 
+### Klipy z korpusu: smích, kašel, lapání po dechu, kroky
+
+Co fyzika neumí uvěřitelně (smích s nádechy mezi „ha“, kašel, odkašlání,
+popotáhnutí, výkřik, šustění konkrétní látky), dodá **korpus klipů**. Klipy
+vyrobí neuronové modely — TTS s neverbálními tagy (Nari Labs Dia,
+Resemble Chatterbox) nebo text -> zvuk (Stable Audio Open) — nebo je
+nahraješ sám. Modely Paprika nespouští: běží jednou, offline, ve workeru
+s vlastním venv (torch, ideálně GPU). Jádro zůstává numpy + scipy a render
+deterministický.
+
+```bash
+python -m paprika samples human request laugh cough gasp --backend dia --count 12 --out req.json
+.venv-human/bin/python tools/human_worker.py req.json --out incoming/ --classify --asr
+python -m paprika samples human import incoming/          # síto + korpus + CREDITS
+python -m paprika samples human import moje/ --kind sniff --license CC0 --author "Jméno"
+python -m paprika samples human                           # kolik klipů má který druh
+```
+
+Import každý klip **prosije**: délka podle druhu, ticho, clipping, podíl
+znělých rámců, u smíchu rytmus „ha“; když worker přidal štítky AudioSet
+(PANNs) nebo přepis (Whisper), vyhodí i klipy, které nejsou tím druhem nebo
+v nichž někdo mluví; nakonec duplicity. Přijaté ořízne, srovná na −20 dBFS
+a zapíše s licencí a zdrojem (model, prompt, seed) do `manifest.json`
+a `CREDITS-human.txt`. Bez licence se klip nepřijme. Instalaci workeru
+a jednotlivých backendů popisuje hlavička `tools/human_worker.py`; backend
+`paprika` (vestavěná syntéza) ověří celý postup bez GPU.
+
+```python
+hlas = s.human("hlas", performer=fletna)
+hlas.clip("laugh", 4, beat=2)                 # po sobě jdoucí volání = jiné klipy
+hlas.clip("sigh", 6, pitch="chord")           # PSOLA na tón akordu, formanty zůstanou
+hlas.clip("cough", 7, beats=1)                # zkrácený s doběhem
+hlas.clip("steps", 0)                         # kroky, šustění: bez výšky
+```
+
+`pitch` jde jen u hlasových druhů a posune nejvýš o 6 půltónů (oktávu
+vybere nejblíž vlastní výšce klipu). Prázdný korpus skončí chybou
+s postupem, jak ho naplnit — žádný tichý návrat k syntéze. Report vypíše
+licence použitých klipů. Druhy: `laugh`, `cough`, `throat`, `sigh`, `gasp`,
+`sniff`, `scream`, `hum`, `cloth`, `steps`.
+
 Fyzika, čísla a zdroje jsou
 v [`docs/superpowers/research/2026-10-23-lidske-zvuky-pruzkum.md`](docs/superpowers/research/2026-10-23-lidske-zvuky-pruzkum.md);
 `songs/dech.py` a `songs/hlas.py` jsou poslechové ukázky.
@@ -626,7 +669,8 @@ paprika/
   install.py      stažení nahrávek a generování SFZ
   voices.py       VocalSet -> jednotlivé tóny (YIN, TD-PSOLA)
   breath.py       VocalSet -> nádechy -> model obálek (mel + PCA) -> syntéza
-  human.py        dech, výdech, mlasknutí, tep, šustění, kroky (fyzika, varianty)
+  human.py        dech, výdech, mlasknutí, tep, šustění, kroky, hlasová gesta (fyzika)
+  corpus.py       korpus klipů lidských zvuků: síto, import, manifest, licence
   oscillators.py  filters.py  modulation.py  patch.py  presets.py
   fx.py  fx_space.py  fx_dyn.py  fx_lofi.py  fx_mic.py  mastering.py  automation.py
   render.py       stopy -> sběrnice -> master -> WAV
@@ -635,7 +679,8 @@ paprika/
   viz.py  cli.py  ASCII výstup a příkazová řádka
 examples/         pět ukázek z tohoto README
 songs/            delší skladby (v2_showcase, divadlo, romantic, dech, hlas)
-tools/            readme_media.py — obrázky a MP3 pro README
+tools/            readme_media.py — obrázky a MP3 pro README;
+                  human_worker.py — neuronové modely pro korpus (vlastní venv)
 ```
 
 Hranice jsou naschvál ostré: `render.py` neví nic o hudební teorii,
@@ -646,7 +691,7 @@ v [`docs/superpowers/specs/`](docs/superpowers/specs/).
 ## Testy
 
 ```bash
-python -m pytest tests/                                     # ~620 testů, bez sítě
+python -m pytest tests/                                     # ~640 testů, bez sítě
 python -m unittest discover tests                           # bez pytestu
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py        # vyrenderuje všechny songy
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # nainstalované nahrávky
@@ -676,5 +721,9 @@ autorů. Když použiješ výsledný zvuk ve hře nebo videu, uveď:
 - **VocalSet** — J. Wilkins, P. Seetharaman, A. Wahl, B. Pardo, **CC BY 4.0**
   (týká se i modelů nádechů, které z nich Paprika spočítá)
 
-Přesné znění je v `CREDITS.txt` ve složce nahrávek. MP3 ukázky
+Přesné znění je v `CREDITS.txt` ve složce nahrávek. Klipy v korpusu
+lidských zvuků mají každý svou licenci (podle modelu nebo autora nahrávky);
+seznam je v `human/CREDITS-human.txt` a report ho vypíše u každé skladby,
+která je používá. Licence modelů (Dia, Chatterbox, Stable Audio Open) před
+vydáním ověř v jejich repozitářích. MP3 ukázky
 v `docs/audio/` z těchto nahrávek vznikly, platí pro ně stejné uvedení autorů.

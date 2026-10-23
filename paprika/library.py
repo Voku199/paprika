@@ -6,6 +6,7 @@ platí první, výchozí. Vzorky leží mimo repo, viz `samples_root()`.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 
@@ -220,4 +221,12 @@ def status_lines(root: str | None = None) -> list[str]:
                           else f"{i.name} ({' '.join(i.arts)})" for i in insts)
         lines.append(f"{g:<10} {'[ok]   ' if ok else '[chybí]'} {names}")
     lines.append("instalace: python -m paprika samples install <skupina|all>")
+    man = os.path.join(base, "human", "manifest.json")
+    if os.path.isfile(man):
+        try:
+            with open(man, encoding="utf-8") as f:
+                n = len(json.load(f).get("clips", []))
+        except ValueError:
+            n = 0
+        lines.append(f"lidské zvuky: {n} klipů v korpusu (python -m paprika samples human)")
     return lines

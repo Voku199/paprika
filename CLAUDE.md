@@ -23,8 +23,12 @@ vocal gestures, body/foley, mic simulation): research proposal in
 (correlated humanize, `Proximity`/`RoomTone`/`DynEQ`, `HumanTrack` with
 physics-based breath/body sounds, breathing rules), H2 (breath models
 from VocalSet, `breath.py`) and H3 (`Glottal` source, `Tract` filter, voiced
-gestures hum/sigh/effort/laugh, `voices.voice_quality`, `choir_tract`) are
-done; H4 (neural corpus) is not. H2 was built on synthetic recordings
+gestures hum/sigh/effort/laugh, `voices.voice_quality`, `choir_tract`) and
+H4 (clip corpus: `corpus.py` sieve/import, offline `tools/human_worker.py`,
+`HumanTrack.clip`) are done. H4's neural backends (Dia, Chatterbox, Stable
+Audio Open) were written from their READMEs and never run — the cloud
+session had no GPU and huggingface.co was blocked; only the `paprika`
+backend is tested. H2 was built on synthetic recordings
 (zenodo.org was blocked in the cloud session); 10 real breaths from the
 user's `samples breaths --examples` then calibrated the physics breath
 (centroid 2.2–2.4 kHz) and exposed note tails YIN misses (now excluded by
@@ -64,8 +68,11 @@ python -m paprika compare ref.mp3 output/x.wav          # mix metrics vs a refer
 python -m paprika samples                               # sampler: path, groups, instruments
 python -m paprika samples install all                   # ~2.3 GB, resumable
 python -m paprika samples breaths --examples output/dechy  # breath models: stats + WAVs
+python -m paprika samples human request laugh --backend dia --out req.json  # worker job
+python tools/human_worker.py req.json --out incoming/    # run models (own venv w/ torch)
+python -m paprika samples human import incoming/         # sieve -> human/ corpus
 
-python -m pytest tests/                                  # ~620 tests, ~60 s
+python -m pytest tests/                                  # ~640 tests, ~65 s
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py     # renders every song, ~2 min
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # installed samples: level + tuning
 python -m pytest tests/test_render.py::TestLimiter::test_tames_overs
@@ -126,6 +133,22 @@ Layer boundaries are deliberately sharp — keep them:
   model-only helpers `breath_phrases`, `air_seconds` used by `HumanTrack`
   and rules. `HumanTrack._pitch("chord")` picks the plan's chord tone
   nearest `GESTURE_CENTER[gesture][voice]`.
+- `corpus.py` — clip corpus for human sounds the physics can't fake (laugh,
+  cough, throat, gasp, sniff, scream, cloth, steps ...) under
+  `<samples>/human/`. Clips come from `tools/human_worker.py` (a separate
+  script with its own venv: Dia / Chatterbox / Stable Audio Open, optional
+  PANNs labels and Whisper transcript in a sidecar JSON; backend `paprika`
+  uses the built-in synthesis to test the protocol) or the user's own
+  recordings. `ingest` sieves (duration/voiced range per `KINDS`, silence,
+  clipping, laugh burst rate, classifier/transcript, duplicates by sha +
+  fine-spectrum fingerprint), trims, normalizes to −20 dBFS and writes
+  `manifest.json` + `CREDITS-human.txt`; no license -> rejected. `pitch` in
+  the manifest is MIDI (YIN median), only for `VOCAL_KINDS`.
+  `HumanTrack.clip(kind, bar, pitch=, beats=)` picks the next clip
+  (content-addressed id in hit params, so renders are cached and stable),
+  `human._clip` PSOLA-shifts it to the octave of the target nearest the
+  clip's own pitch (max ±6 st). Empty kind -> `MissingCorpus`
+  (`SamplesMissing`); the report lists clip licenses (`_corpus_credits`).
 - `sfz.py` — SFZ text -> `Region`s. Text only, no audio.
 - `sampler.py` — `Sampler`: region selection (key/vel/round robin), pitch shift +
   resample in one Hermite read, loops, legato, release. Knows no beats or pedal.

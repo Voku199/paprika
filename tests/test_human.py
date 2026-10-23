@@ -264,7 +264,9 @@ class TestGenerators(unittest.TestCase):
 
     def test_all_render_bounded(self):
         self.assertEqual(sorted(GENERATORS), sorted(HUMAN_NAMES))
-        for name in HUMAN_NAMES:
+        # klip potřebuje korpus — testuje ho test_corpus
+        self.assertEqual(set(HUMAN_NAMES) - set(self.PARAMS), {"clip"})
+        for name in self.PARAMS:
             y = render_sfx(name, self.PARAMS[name], SR, 120)
             self.assertEqual(y.ndim, 2)
             self.assertEqual(y.shape[1], 2)

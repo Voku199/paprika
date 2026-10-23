@@ -48,10 +48,10 @@ __all__ = ["HUMAN_NAMES", "HUMAN_CHARS", "BREATH_KINDS", "EXHALE_KINDS",
 TWO_PI = 2.0 * math.pi
 
 HUMAN_NAMES = ("breath", "exhale", "lip_smack", "heartbeat", "cloth", "step",
-               "hum", "sigh", "effort", "laugh")
+               "hum", "sigh", "effort", "laugh", "clip")
 HUMAN_CHARS = {"breath": "^", "exhale": "~", "lip_smack": "'", "heartbeat": "@",
                "cloth": "%", "step": "x", "hum": "m", "sigh": "\\", "effort": "!",
-               "laugh": "h"}
+               "laugh": "h", "clip": "&"}
 VOICE_GESTURES = ("hum", "sigh", "effort", "laugh")
 BREATH_KINDS = ("mouth", "nose", "catch")
 EXHALE_KINDS = ("mouth", "nose", "sigh")
@@ -656,6 +656,42 @@ def _laugh(sr, bpm, midi, calls, rate, vowel, voice, variant):
     return _stereo(_edges(_ceiling(_level(y, "laugh")), sr))
 
 
+# --------------------------------------------------------------------------
+# klipy z korpusu (corpus.py, fáze H4)
+# --------------------------------------------------------------------------
+
+CLIP_RMS = 0.08        # RMS aktivní části klipu při vel 127 (korpus má -20 dBFS)
+CLIP_SHIFT = 6.0       # půltónů: víc PSOLA neposune, zní to pak uměle
+
+
+def _clip(sr, bpm, kind, cid, midi, beats, variant):
+    """Klip z korpusu: volitelně posunutý PSOLA na tón `midi` (oktávu vybere
+    nejblíž vlastní výšce klipu, formanty zůstanou), převzorkovaný na `sr`
+    a zkrácený na `beats` s 30 ms doběhem."""
+    from . import corpus, voices
+    entry = corpus.clip_entry(cid)
+    csr, x = corpus.read_clip(cid)
+    x = np.array(x, dtype=np.float64)
+    if midi is not None and entry.get("pitch") is not None:
+        own = float(entry["pitch"])
+        target = float(midi) + 12.0 * round((own - float(midi)) / 12.0)
+        step = float(np.clip(target - own, -CLIP_SHIFT, CLIP_SHIFT))
+        pitch, _, hop = voices.track_pitch(x, csr)
+        if abs(step) > 0.01 and int(np.sum(~np.isnan(pitch))) >= 5:
+            x = voices.psola(x, csr, pitch, hop, step)
+    if csr != sr:
+        g = math.gcd(int(sr), int(csr))
+        x = signal.resample_poly(x, int(sr) // g, int(csr) // g)
+    if beats:
+        n = max(16, int(float(beats) * 60.0 / float(bpm) * sr))
+        if x.size > n:
+            x = x[:n].copy()
+            tail = min(n // 2, int(0.03 * sr))
+            x[-tail:] *= np.linspace(1.0, 0.0, tail)
+    y = x * (CLIP_RMS / 10.0 ** (-20.0 / 20.0))
+    return _stereo(_edges(_ceiling(y), sr, 0.002))
+
+
 GENERATORS = {
     "breath": _breath,
     "exhale": _exhale,
@@ -667,4 +703,5 @@ GENERATORS = {
     "sigh": _sigh,
     "effort": _effort,
     "laugh": _laugh,
+    "clip": _clip,
 }

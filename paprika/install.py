@@ -38,7 +38,7 @@ SALAMANDER_URL = ("https://archive.org/download/SalamanderGrandPianoV3/"
 SALAMANDER_SIZE = 488713261
 VOCALSET_URL = "https://zenodo.org/records/1442513/files/VocalSet11.zip?download=1"
 VOCALSET_ZIP = "VocalSet11.zip"
-VOCALSET_SIZE = 2077087366
+VOCALSET_SIZE = 2077243579        # podle API Zenodo (md5 0c09396242f946e7111ad7d8fc649b81)
 MANIFEST = "paprika_samples.json"
 CREDITS = """Vzorky nainstalované Paprikou
 ==============================

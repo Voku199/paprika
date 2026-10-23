@@ -51,6 +51,7 @@ from .presets import (PRESET_TAGS, PRESETS, preset, preset_fx, preset_names,
                       presets_by_tag, tag_names)
 from .render import RenderResult, limiter, mix, render_song, write_wav
 from .sampler import SampleError, Sampler
+from .corpus import CORPUS_KINDS, MissingCorpus
 from .human import HUMAN_NAMES
 from .sfx import SFX_NAMES
 from .song import Bus, Clip, DrumTrack, HumanTrack, Section, SfxTrack, Song, Track
@@ -58,7 +59,7 @@ from .theory import (CHORDS, SCALES, TheoryError, arp, chord, in_scale, invert,
                      note_name, pitch, scale, scale_pcs)
 from .viz import piano_roll, waveform
 
-__version__ = "2.5.0"
+__version__ = "2.6.0"
 
 __all__ = [
     # model
@@ -76,7 +77,8 @@ __all__ = [
     "midi_to_freq",
     "preset", "preset_names", "preset_fx", "presets_by_tag", "tag_names",
     "PRESETS", "PRESET_TAGS",
-    "Sampler", "SampleError", "SamplesMissing", "instrument",
+    "Sampler", "SampleError", "SamplesMissing", "MissingCorpus", "CORPUS_KINDS",
+    "instrument",
     "instrument_names", "samples_root", "INSTRUMENTS",
     # efekty
     "Fx", "Reverb", "Hall", "Delay", "LowPass", "HighPass", "Filter", "EQ",

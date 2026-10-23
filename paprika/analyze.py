@@ -9,6 +9,7 @@ import os
 
 import numpy as np
 
+from . import corpus as _corpus
 from . import human as _human
 from . import metrics as _metrics
 from . import theory
@@ -139,6 +140,9 @@ MASKING_SHOWN = 4         # kolik nejdelších překryvů report vypíše jako W
 
 
 BREATH_GESTURES = frozenset({"breath", "exhale", "lip_smack", "sigh", "effort", "laugh"})
+# krátké klipy z korpusu, které se v maskování chovají jako gesta dechu
+CLIP_GESTURES = frozenset({"laugh", "cough", "throat", "sigh", "gasp", "sniff"})
+CREDITS_SHOWN = 4         # kolik zdrojů klipů report vypíše
 STERILE_JITTER = 0.0005  # Glottal bez jitteru a shimmeru zní jako stroj
 
 
@@ -147,7 +151,15 @@ def _gestures_only(t) -> bool:
     tišeji, takže podíl pásem v taktu o maskování nic neříká — hlasitost
     dechu hlídá `_breath_level`. Tep a kroky se kontrolují dál."""
     return (isinstance(t, HumanTrack) and bool(t.hits)
-            and all(h.name in BREATH_GESTURES for h in t.hits))
+            and all(h.name in BREATH_GESTURES
+                    or (h.name == "clip" and h.params[0] in CLIP_GESTURES)
+                    for h in t.hits))
+
+
+def _vocal(h) -> bool:
+    """Zvuk, který dělá hlas interpreta (nádech, gesto, hlasový klip)."""
+    return (h.name == "breath" or h.name in _human.VOICE_GESTURES
+            or (h.name == "clip" and h.params[0] in _corpus.VOCAL_KINDS))
 
 
 def _masking(song: Song, buffers: dict, warns: list) -> None:
@@ -257,15 +269,15 @@ def _breathing(song: Song, warns: list) -> None:
         if perf is not None and not t.section:
             notes = perf.all_notes()
             shown = 0
-            gestures = sorted((h for h in t.hits
-                               if h.name == "breath" or h.name in _human.VOICE_GESTURES),
-                              key=lambda h: h.start_beat)
+            gestures = sorted((h for h in t.hits if _vocal(h)), key=lambda h: h.start_beat)
             for b in gestures:
                 lo, hi = b.start_beat, b.start_beat + b.dur_beats
                 if any(n.start_beat < hi - BREATH_EPS
                        and n.start_beat + n.dur_beats > lo + BREATH_EPS for n in notes):
                     bar = _bar_of(song, hi if b.name == "breath" else lo)
-                    what = "nádech" if b.name == "breath" else f"hlasové gesto {b.name}"
+                    what = ("nádech" if b.name == "breath"
+                            else f"klip {b.params[0]}" if b.name == "clip"
+                            else f"hlasové gesto {b.name}")
                     warns.append(Warning_(
                         "WARN", t.name,
                         f"bar {bar}   {what} jde přes noty stopy {perf.name} — "
@@ -293,16 +305,19 @@ def _breathing(song: Song, warns: list) -> None:
         shown = 0
         prev: dict = {}
         for h in sorted(t.hits, key=lambda h: h.start_beat):
-            if prev.get(h.name) == h.params:
+            key = (h.name, h.params[0]) if h.name == "clip" else h.name
+            if prev.get(key) == h.params:
                 bar = _bar_of(song, h.start_beat)
+                fix = ("korpus má málo klipů toho druhu, doplň ho (samples human)"
+                       if h.name == "clip" else "nech variant=None")
                 warns.append(Warning_(
                     "WARN", t.name,
                     f"bar {bar}   {h.name} je stejný vzorek jako předchozí — "
-                    f"kulometný efekt; nech variant=None", bar))
+                    f"kulometný efekt; {fix}", bar))
                 shown += 1
                 if shown >= 3:
                     break
-            prev[h.name] = h.params
+            prev[key] = h.params
         if len(breaths) >= 4:
             ends = np.array([b.start_beat + b.dur_beats for b in breaths])
             off = ends - np.round(ends / BREATH_GRID) * BREATH_GRID
@@ -311,6 +326,24 @@ def _breathing(song: Song, warns: list) -> None:
                     "INFO", t.name,
                     "nádechy mají všechny stejný odstup od mřížky — zní "
                     "strojově, zkus humanize()"))
+
+
+def _corpus_credits(song: Song, warns: list) -> None:
+    """Klipy z korpusu mají licence: report vypíše jejich zdroje."""
+    lines: dict = {}
+    for t in song.tracks:
+        if isinstance(t, HumanTrack):
+            for line in t.credits.values():
+                lines[line] = lines.get(line, 0) + 1
+    if not lines:
+        return
+    shown = sorted(lines, key=lambda k: (-lines[k], k))
+    more = len(shown) - CREDITS_SHOWN
+    text = "; ".join(shown[:CREDITS_SHOWN]) + (f"; a {more} dalších" if more > 0 else "")
+    warns.append(Warning_(
+        "INFO", "korpus",
+        f"klipy lidských zvuků: {text} — při vydání uveď atribuci "
+        f"(celý seznam v {_corpus.CREDITS})"))
 
 
 def _breath_level(song: Song, buffers: dict, warns: list) -> None:
@@ -530,6 +563,7 @@ def warnings_for(song: Song, audio: np.ndarray, buffers: dict,
     _sample_range(song, warns)
     _breathing(song, warns)
     _sterile_voice(song, warns)
+    _corpus_credits(song, warns)
     _breath_level(song, buffers, warns)
     warns.extend(theory_warnings(song))
     warns.sort(key=lambda w: 0 if w.level == "WARN" else 1)
@@ -548,6 +582,7 @@ def model_warnings(song: Song) -> list:
     _sample_range(song, warns)
     _breathing(song, warns)
     _sterile_voice(song, warns)
+    _corpus_credits(song, warns)
     warns.extend(theory_warnings(song))
     warns.sort(key=lambda w: 0 if w.level == "WARN" else 1)
     return warns

@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import subprocess
 import sys
 
+from .library import SamplesMissing
 from .song import Song, suppress_render
 
 __all__ = ["main", "load_song", "default_output"]
@@ -138,6 +140,24 @@ def build_parser() -> argparse.ArgumentParser:
                     help="znovu najde nádechy v nahrávkách a přepočítá modely")
     sb.add_argument("--examples", metavar="SLOŽKA",
                     help="uloží skutečné a syntetizované nádechy jako WAV")
+    sh = smsub.add_parser(
+        "human", help="korpus lidských zvuků (smích, kašel, ...): stav, zadání, import")
+    shsub = sh.add_subparsers(dest="human_cmd")
+    hr = shsub.add_parser("request", help="zapíše zadání pro tools/human_worker.py")
+    hr.add_argument("kinds", nargs="+", help="druhy: laugh, cough, sigh, ...")
+    hr.add_argument("--backend", default="dia",
+                    help="dia, chatterbox, stable_audio nebo paprika (výchozí dia)")
+    hr.add_argument("--count", type=int, default=8, help="generací na druh (výchozí 8)")
+    hr.add_argument("--seed", type=int, default=0, help="první seed (výchozí 0)")
+    hr.add_argument("--duration", type=float, help="délka v s (stable_audio)")
+    hr.add_argument("--model", help="jiný model backendu")
+    hr.add_argument("--out", default="human_request.json",
+                    help="soubor zadání (výchozí human_request.json)")
+    hi = shsub.add_parser("import", help="prosije WAV ze složky a přijaté uloží do korpusu")
+    hi.add_argument("folder", help="složka s WAV (a JSON od workeru)")
+    hi.add_argument("--kind", help="druh pro WAV bez JSON (vlastní nahrávky)")
+    hi.add_argument("--license", help="licence pro WAV bez JSON, např. CC0 nebo vlastní")
+    hi.add_argument("--author", help="autor / zdroj pro atribuci")
 
     pr = sub.add_parser("presets", help="vypíše presety, bicí sady a SFX")
     pr.add_argument("--tag", help="jen presety s tagem (orchestral, choir, ...)")
@@ -214,7 +234,7 @@ def main(argv=None) -> int:
                 print(f"hotovo: {', '.join(names)}")
             elif getattr(args, "samples_cmd", None) == "breaths":
                 from . import breath
-                from .library import SamplesMissing, samples_root
+                from .library import samples_root
                 if args.rebuild:
                     full = os.path.join(samples_root(), "vocalset", "FULL")
                     if not os.path.isdir(full):
@@ -229,6 +249,36 @@ def main(argv=None) -> int:
                               f"(*_real_* = nahrávka, *_synth_* = syntéza z modelu)")
                 except SamplesMissing as e:
                     raise CliError(str(e))
+            elif getattr(args, "samples_cmd", None) == "human":
+                from . import corpus
+                cmd = getattr(args, "human_cmd", None)
+                if cmd == "request":
+                    try:
+                        req = corpus.request(args.kinds, args.backend, args.count, args.seed,
+                                             args.duration, args.model)
+                    except ValueError as e:
+                        raise CliError(str(e))
+                    with open(args.out, "w", encoding="utf-8") as f:
+                        json.dump(req, f, ensure_ascii=False, indent=1)
+                    print(f"{len(req['jobs'])} generací -> {args.out}\n"
+                          f"dál: python tools/human_worker.py {args.out} --out <složka> "
+                          f"[--classify --asr]; python -m paprika samples human import "
+                          f"<složka>")
+                elif cmd == "import":
+                    if not os.path.isdir(args.folder):
+                        raise CliError(f"složka {args.folder} neexistuje")
+                    if args.kind and args.kind not in corpus.KINDS:
+                        raise CliError(f"neznámý druh {args.kind!r}; k dispozici: "
+                                       f"{', '.join(corpus.KINDS)}")
+                    res = corpus.ingest(args.folder, kind=args.kind, license=args.license,
+                                        attribution=args.author)
+                    rej = sorted(res["rejected"].items())
+                    for fn, why in rej[:20]:
+                        print(f"  odmítnuto {fn}: {why}")
+                    if len(rej) > 20:
+                        print(f"  ... a {len(rej) - 20} dalších")
+                else:
+                    print("\n".join(corpus.status_lines()))
             else:
                 from .library import status_lines
                 print("\n".join(status_lines()))
@@ -254,6 +304,9 @@ def main(argv=None) -> int:
                     n + ("" if is_installed(n) else "*") for n in INSTRUMENTS)
                     + "   (* = nenainstalováno: python -m paprika samples)")
     except CliError as e:
+        print(f"chyba: {e}", file=sys.stderr)
+        return 2
+    except SamplesMissing as e:          # chybějící vzorky nebo korpus: postup, ne traceback
         print(f"chyba: {e}", file=sys.stderr)
         return 2
     return 0

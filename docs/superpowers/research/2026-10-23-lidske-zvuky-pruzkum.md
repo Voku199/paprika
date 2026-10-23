@@ -15,7 +15,20 @@ korpusu. Fáze H3 implementována (2026-10-23, verze 2.5.0): `Glottal`
 formanty -> kaskáda, 5parametrová trubice fitovaná na formanty),
 `Formant(mode="cascade", vary=)`, znělá gesta hum / sigh / effort / laugh
 s výškou z harmonického plánu, `voices.voice_quality`, pravidlo „sterilní
-hlas“, preset `choir_tract`, ukázka `songs/hlas.py`. Zbývá H4.
+hlas“, preset `choir_tract`, ukázka `songs/hlas.py`. Fáze H4
+implementována (2026-10-23, verze 2.6.0) jinak, než navrhuje tabulka níž:
+místo SFZ je korpus klipů `<vzorky>/human/` s `manifest.json`
+a `CREDITS-human.txt` (`corpus.py`), protože smích nebo kašel nejsou tóny
+na klaviatuře; `HumanTrack.clip(druh, takt, pitch=, beats=)` bere varianty
+a hlasové klipy posouvá PSOLA na tón akordu. Worker
+`tools/human_worker.py` (Dia, Chatterbox, Stable Audio Open přes diffusers,
+PANNs, Whisper) píše WAV + JSON se zdrojem a licencí; síto v jádru
+(délka, ticho, clipping, znělost, rytmus smíchu, štítky, přepis,
+duplicity). Neuronové backendy jsou napsané podle README projektů a nebyly
+spuštěné (cloud bez GPU, huggingface.co blokované); celý protokol je
+ověřený backendem `paprika` (vestavěná syntéza). Orpheus a Stable Audio
+3.0 Small zapojené nejsou; další model je funkce `gen_<jméno>` ve workeru
+(`BACKENDS`) a prompty v `corpus.PROMPTS`.
 
 **Ověření na skutečných datech (2026-10-23):** z výstupu
 `samples breaths --examples` (10 skutečných nádechů, female7, female8,

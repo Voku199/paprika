@@ -132,6 +132,12 @@ def build_parser() -> argparse.ArgumentParser:
     smsub = sm.add_subparsers(dest="samples_cmd")
     si = smsub.add_parser("install", help="stáhne a připraví vzorky skupiny")
     si.add_argument("group", help="piano, strings, winds, brass, mallets, voices nebo all")
+    sb = smsub.add_parser(
+        "breaths", help="modely nádechů z VocalSet: statistiky, ukázky k poslechu")
+    sb.add_argument("--rebuild", action="store_true",
+                    help="znovu najde nádechy v nahrávkách a přepočítá modely")
+    sb.add_argument("--examples", metavar="SLOŽKA",
+                    help="uloží skutečné a syntetizované nádechy jako WAV")
 
     pr = sub.add_parser("presets", help="vypíše presety, bicí sady a SFX")
     pr.add_argument("--tag", help="jen presety s tagem (orchestral, choir, ...)")
@@ -206,6 +212,23 @@ def main(argv=None) -> int:
                 except _install.InstallError as e:
                     raise CliError(str(e))
                 print(f"hotovo: {', '.join(names)}")
+            elif getattr(args, "samples_cmd", None) == "breaths":
+                from . import breath
+                from .library import SamplesMissing, samples_root
+                if args.rebuild:
+                    full = os.path.join(samples_root(), "vocalset", "FULL")
+                    if not os.path.isdir(full):
+                        raise CliError(f"nahrávky VocalSet nejsou rozbalené ({full}) — "
+                                       f"python -m paprika samples install voices")
+                    breath.build(samples_root(), reuse=False)
+                try:
+                    print("\n".join(breath.stats_lines()))
+                    if args.examples:
+                        paths = breath.write_examples(args.examples)
+                        print(f"-> {len(paths)} WAV v {args.examples} "
+                              f"(*_real_* = nahrávka, *_synth_* = syntéza z modelu)")
+                except SamplesMissing as e:
+                    raise CliError(str(e))
             else:
                 from .library import status_lines
                 print("\n".join(status_lines()))

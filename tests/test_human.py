@@ -39,7 +39,7 @@ def _gain_db(y, freq, sr=SR) -> float:
     return 20.0 * np.log10(abs(h[np.argmin(abs(f - freq))]))
 
 
-BREATH = ("mouth", 0.9, 0.6, "a", "male", 0)      # 0.45 s při 120 BPM
+BREATH = ("mouth", 0.9, 0.6, "a", "male", None, 0)      # 0.45 s při 120 BPM
 
 
 class TestNoise(unittest.TestCase):
@@ -285,21 +285,21 @@ class TestGenerators(unittest.TestCase):
 
     def test_faster_breath_is_louder_and_brighter(self):
         ref = render_sfx("breath", BREATH, SR, 120)
-        catch = render_sfx("breath", ("catch", 0.4, 0.35, "a", "male", 0), SR, 120)
-        slow = render_sfx("breath", ("mouth", 2.4, 1.0, "a", "male", 0), SR, 120)
+        catch = render_sfx("breath", ("catch", 0.4, 0.35, "a", "male", None, 0), SR, 120)
+        slow = render_sfx("breath", ("mouth", 2.4, 1.0, "a", "male", None, 0), SR, 120)
         self.assertGreater(_rms_db(catch), _rms_db(ref) + 2.0)
         self.assertLess(_rms_db(slow), _rms_db(ref) - 3.0)
         self.assertGreater(_centroid(catch), _centroid(slow) + 300.0)
 
     def test_nose_quieter_and_darker(self):
-        mouth = render_sfx("breath", ("mouth", 1.2, 0.6, "a", "male", 0), SR, 120)
-        nose = render_sfx("breath", ("nose", 1.2, 0.6, "a", "male", 0), SR, 120)
+        mouth = render_sfx("breath", ("mouth", 1.2, 0.6, "a", "male", None, 0), SR, 120)
+        nose = render_sfx("breath", ("nose", 1.2, 0.6, "a", "male", None, 0), SR, 120)
         self.assertLess(_rms_db(nose), _rms_db(mouth))
         self.assertLess(_centroid(nose), _centroid(mouth))
 
     def test_vowel_shapes_spectrum(self):
-        u = render_sfx("breath", ("mouth", 0.9, 0.6, "u", "male", 0), SR, 120)
-        i = render_sfx("breath", ("mouth", 0.9, 0.6, "i", "male", 0), SR, 120)
+        u = render_sfx("breath", ("mouth", 0.9, 0.6, "u", "male", None, 0), SR, 120)
+        i = render_sfx("breath", ("mouth", 0.9, 0.6, "i", "male", None, 0), SR, 120)
         self.assertGreater(_centroid(i), _centroid(u) + 500.0)
 
     def test_breath_has_little_sub_and_air(self):

@@ -536,6 +536,16 @@ class SfxTrack(DrumTrack):
         return super().humanize(timing=0.0, vel=vel, seed=seed, corr=corr)
 
 
+def _vocalset_singer(track) -> str | None:
+    """Nástroj VocalSet stopy (`soprano`, `male_choir`, ...), jinak None."""
+    patch = getattr(track, "patch", None)
+    if not isinstance(patch, Sampler):
+        return None
+    from .voices import VOICES
+    base = str(patch.name).lower().partition(".")[0]
+    return base if base in VOICES else None
+
+
 class HumanTrack(SfxTrack):
     """Lidské zvuky: nádech, výdech, mlasknutí, srdce, šustění oblečení, kroky.
 
@@ -548,7 +558,8 @@ class HumanTrack(SfxTrack):
 
     def __init__(self, song: "Song", name: str = "human", vol: float = 0.35,
                  pan: float = 0.0, performer: Track | None = None,
-                 voice: str | None = None, seed: int = 0, section: bool = False):
+                 voice: str | None = None, seed: int = 0, section: bool = False,
+                 breath_model: str | None = None):
         super().__init__(song, name, vol, pan)
         self.performer = performer
         self.voice = voice or _human.voice_of(performer)
@@ -557,6 +568,11 @@ class HumanTrack(SfxTrack):
                              f"{', '.join(_human.HUMAN_VOICES)}")
         self.seed = int(seed)
         self.section = bool(section)
+        self.breath_model = None
+        if breath_model is not None:
+            from . import breath as _breath
+            self.breath_model = _breath.resolve(breath_model)
+            _breath.load(self.breath_model)    # chybí-li data, chyba hned, ne v renderu
 
     def __repr__(self) -> str:  # pragma: no cover
         who = f" performer={self.performer.name}" if self.performer else ""
@@ -580,6 +596,12 @@ class HumanTrack(SfxTrack):
                              f"{', '.join(VOWELS)}")
         return v
 
+    def _breath_params(self, kind: str, beats: float, depth: float, vowel: str,
+                       variant) -> tuple:
+        model = self.breath_model if kind != "nose" else None
+        return (kind, beats, depth, vowel, self.voice, model,
+                self._variant("breath", variant))
+
     @staticmethod
     def _depth(depth: float) -> float:
         d = float(depth)
@@ -597,7 +619,9 @@ class HumanTrack(SfxTrack):
         nádech mezi frázemi). `beats` je délka (výchozí 0.45 / 0.6 / 0.2 s
         podle tempa songu), `depth` objem 0..1 (výchozí 0.6, catch 0.35).
         Stejný objem za kratší čas zní hlasitěji a jasněji. `vowel` je tvar
-        úst (výchozí podle nástroje stopy `performer`, jinak "a").
+        úst (výchozí podle nástroje stopy `performer`, jinak "a"). Má-li
+        stopa `breath_model`, barvu a průběh dává model skutečných nádechů
+        (kromě `nose`).
         """
         if kind not in _human.BREATH_KINDS:
             raise ValueError(f"neznámý druh nádechu {kind!r}; k dispozici: "
@@ -608,8 +632,7 @@ class HumanTrack(SfxTrack):
         depth = self._depth(depth if depth is not None
                             else (0.35 if kind == "catch" else 0.6))
         end = self._bar_to_beat(to_bar) + float(beat)
-        params = (kind, beats, depth, self._vowel(vowel), self.voice,
-                  self._variant("breath", variant))
+        params = self._breath_params(kind, beats, depth, self._vowel(vowel), variant)
         return self._put("breath", end - beats, vel, params, beats)
 
     def exhale(self, bar: float, beat: float = 0.0, beats: float | None = None,
@@ -668,7 +691,7 @@ class HumanTrack(SfxTrack):
             v = vel if vel is not None else int(np.clip(55 + 0.45 * mean_vel, 40, 120))
             beats = dur / spb
             end_beat = start - lead_sec / spb
-            params = (k, beats, depth, vowel, self.voice, self._variant("breath", None))
+            params = self._breath_params(k, beats, depth, vowel, None)
             self._put("breath", end_beat - beats, v, params, beats)
         return self
 
@@ -893,7 +916,8 @@ class Song:
 
     def human(self, name: str = "human", vol: float = 0.35, pan: float = 0.0,
               performer=None, voice: str | None = None, seed: int = 0,
-              section: bool = False, mic: bool = True) -> HumanTrack:
+              section: bool = False, mic: bool = True,
+              breath_model: str | None = "auto") -> HumanTrack:
         """Přidá stopu lidských zvuků (dech, mlasknutí, srdce, oblečení, kroky).
 
         `performer` je stopa (nebo její jméno), jejíž interpret dýchá:
@@ -902,11 +926,20 @@ class Song:
         `section=True` pro sbor nebo sekci (dýchá střídavě, pravidla o dechu
         se na ni nevztahují). `mic=True` přidá blízký mikrofon:
         `Proximity(0.15)` a `RoomTone()`; `mic=False` nechá zvuk suchý.
+
+        `breath_model` vybere model skutečných nádechů z VocalSet: `"auto"`
+        vezme zpěváka nástroje `performer` (`soprano`, `male_choir`, ...),
+        u jiných nástrojů zůstane fyzikální dech; jméno (`"female2"`,
+        `"alto"`, `"male"`, `"female"`) ho vynutí, `None` vypne. Chybí-li
+        model, letí `SamplesMissing` s příkazem instalace.
         """
         if isinstance(performer, str):
             performer = self.get(performer)
+        if breath_model == "auto":
+            breath_model = _vocalset_singer(performer)
         t = HumanTrack(self, self._unique(name), vol, pan, performer=performer,
-                       voice=voice, seed=seed, section=section)
+                       voice=voice, seed=seed, section=section,
+                       breath_model=breath_model)
         if mic:
             from .fx_mic import Proximity, RoomTone
             t.fx(Proximity(dist=0.15), RoomTone())

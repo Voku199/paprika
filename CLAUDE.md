@@ -21,7 +21,10 @@ roadmap (`docs/superpowers/research/2026-10-21-ai-engine-pruzkum.md`) phase 1
 vocal gestures, body/foley, mic simulation): research proposal in
 `docs/superpowers/research/2026-10-23-lidske-zvuky-pruzkum.md`; phase H1
 (correlated humanize, `Proximity`/`RoomTone`/`DynEQ`, `HumanTrack` with
-physics-based breath/body sounds, breathing rules) is done, H2–H4 are not.
+physics-based breath/body sounds, breathing rules) and H2 (breath models
+from VocalSet, `breath.py`) are done; H3–H4 are not. H2 was built and tested
+on synthetic recordings only (zenodo.org was blocked in the cloud session) —
+its thresholds still need a check on the real corpus via `samples breaths`.
 
 The library is *not* a music generator — melody, harmony and structure are
 written by the author (usually the AI). Paprika supplies theory, synthesis, FX,
@@ -51,8 +54,9 @@ python -m paprika presets
 python -m paprika compare ref.mp3 output/x.wav          # mix metrics vs a reference
 python -m paprika samples                               # sampler: path, groups, instruments
 python -m paprika samples install all                   # ~2.3 GB, resumable
+python -m paprika samples breaths --examples output/dechy  # breath models: stats + WAVs
 
-python -m pytest tests/                                  # ~570 tests, ~60 s
+python -m pytest tests/                                  # ~590 tests, ~60 s
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py     # renders every song, ~2 min
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # installed samples: level + tuning
 python -m pytest tests/test_render.py::TestLimiter::test_tames_overs
@@ -117,6 +121,16 @@ Layer boundaries are deliberately sharp — keep them:
   kept); rough ones (subharmonic > -33 dB) are dropped. `catalog.json` caches the
   notes so SFZ can be regenerated without re-cutting; singers added to `VOICES`
   later are cut and appended to the existing catalog by `build()`.
+- `breath.py` — VocalSet breaths -> model: before every sung onset (YIN run
+  ≥ 0.15 s) find noise above the room floor ending ≤ 0.4 s before it, reject
+  rumble/click/tone/hiss by spectrum, describe each breath as loudness contour
+  + 28-band mel shape (area-normalized bank) on 24 normalized time points,
+  PCA per singer (≥ 8 breaths) and pooled `male`/`female` ->
+  `vocalset/breath/models.json`; STFT noise synthesis from a sampled vector.
+  `_verify` stores LSD / envelope / centroid of synthesis vs corpus. Built by
+  `install._install_vocalset` after `voices.build`; `human._breath_data` uses
+  it with the physics level/tilt calibration. Missing model -> `MissingModel`
+  (a `SamplesMissing`).
 - `fx.py`, `fx_space.py`, `fx_dyn.py`, `fx_lofi.py`, `fx_mic.py` — track/bus/master
   effects (`fx_mic`: `Proximity` first-order shelf from the spherical-wave
   formula, gated `RoomTone`; `DynEQ` lives in `fx_dyn`).

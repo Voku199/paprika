@@ -197,6 +197,41 @@ Efekty blízkého mikrofonu (použitelné na kteroukoli stopu):
 | `RoomTone(level=-66, color="pink", attack=0.08, release=0.5)` | šum místnosti jen tam, kde stopa zní (s náběhem a doběhem) — žádné digitální ticho pod blízkým zdrojem |
 | `DynEQ(freq, q, threshold, ratio, range_db, source=)` | zvon, který stáhne pásmo jen při přebytku energie (ostré nádechy); `source` = klíč z jiné stopy |
 
+### Dech z dat (VocalSet)
+
+S nainstalovaným VocalSetem (`samples install voices`) bere nádech barvu
+a průběh ze skutečných nádechů zpěváků. Instalace je najde v nahrávkách
+(šum nad hladinou místnosti těsně před nasazením tónu, bez dunění, cvaků
+a tónu), popíše obálkou hlasitosti a tvarem spektra v 28 mel pásmech a
+spočítá model (PCA) pro každého zpěváka a souhrnně pro muže a ženy.
+Syntéza z modelu dá pokaždé jiný nádech libovolné délky; hlasitost a jas
+dál řídí fyzika proudu (rychlý nádech je hlasitější a jasnější).
+
+```python
+sop = s.track("soprano.aah")
+dech = s.human(performer=sop)              # breath_model="auto" -> zpěvačka female2
+flet = s.human(performer=flute, breath_model="female")   # vynucený model
+s.human(performer=sop, breath_model=None)  # fyzikální dech jako v H1
+```
+
+`breath_model`: `"auto"` (výchozí) vezme zpěváka nástroje VocalSet
+(`soprano` → female2, `alto` → female7, `tenor` → male9, `basso` → male8,
+sbory → souhrnný `male`/`female`), u ostatních nástrojů zůstane fyzika;
+jméno zpěváka, nástroje nebo `male`/`female` model vynutí. Zpěvák s méně
+než 8 nalezenými nádechy dostane souhrnný model své skupiny. `nose`
+zůstává fyzikální. Chybí-li model, letí `SamplesMissing` s příkazem
+instalace (bez tichého návratu k syntéze).
+
+```bash
+python -m paprika samples breaths              # statistiky modelů a odmítnutých kandidátů
+python -m paprika samples breaths --examples output/dechy   # skutečné vs. syntetizované WAV
+python -m paprika samples breaths --rebuild    # znovu prohledá nahrávky
+```
+
+Statistiky ukazují délky nádechů, jejich hlasitost pod zpěvem, těžiště
+spektra korpusu a syntézy a odchylku syntézy od korpusu (LSD a obálka
+v dB, dobré je pod ~2 dB) — AI dech neslyší, tohle je její kontrola.
+
 Fyzika, čísla a zdroje jsou v
 `docs/superpowers/research/2026-10-23-lidske-zvuky-pruzkum.md`;
 `songs/dech.py` je poslechová ukázka.
@@ -210,6 +245,7 @@ závislost navíc). Vzorky se stáhnou jednou, mimo repo:
 ```bash
 python -m paprika samples                  # stav, cesta, nástroje a artikulace
 python -m paprika samples install all      # ~4.5 GB; nebo piano|strings|winds|brass|mallets|percussion|voices
+python -m paprika samples breaths          # modely nádechů z VocalSet (po instalaci voices)
 ```
 
 Vzorky leží v `%LOCALAPPDATA%\paprika\samples` (jinde `~/.paprika/samples`),
@@ -585,6 +621,7 @@ paprika/
   library.py      katalog samplovaných nástrojů, cesta ke vzorkům
   install.py      stažení Salamander + VSCO 2 CE + VocalSet, generování SFZ
   voices.py       VocalSet -> tóny (YIN, oktáva z harmonických, TD-PSOLA) -> SFZ
+  breath.py       VocalSet -> nádechy -> model obálek (mel + PCA) -> syntéza
   render.py       stopy -> busy -> master -> stereo buffer -> WAV
   rules.py        pravidla teorie nad notami (bas, nevlastní tóny, paralely, ...)
   analyze.py      mix report + hudební warningy, check report bez renderu

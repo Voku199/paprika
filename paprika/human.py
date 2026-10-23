@@ -16,6 +16,10 @@ přizpůsobit frázi a nikdy se neopakovaly:
   (PhISEM, Perry Cook).
 - **Kroky a srdce** jsou tlumené rezonance buzené krátkým pulzem.
 
+Nádech může místo fyzikálního traktu vzít barvu a průběh z modelu
+skutečných nádechů zpěváků VocalSet (`breath.py`, parametr `model`);
+hlasitost a jas pak dál řídí stejná fyzika proudu.
+
 Každý zvuk má `variant`, ze které se losují parametry (délka traktu, tvar
 průtoku, zrna šustění). Dva nádechy za sebou tak nejsou tentýž vzorek.
 Generátor vrací `(m, 2)` float64 při velocity 127. Render a cache řeší
@@ -74,6 +78,7 @@ HIGH_POLES = ((4500.0, 900.0), (5800.0, 1200.0))
 FRONT_MOUTH = (0.7, 3500.0)
 FRONT_NOSE = (0.4, 2500.0)
 FRONT_SPEED_REF = 1.0  # rychlost proudu (průtok / FLOW_REF), při které platí podíl
+DATA_TILT = 3.0       # dB/okt nad 1 kHz na zdvojnásobení rychlosti proudu (model z dat)
 
 # --- zásoba vzduchu pro frázi (pravidlo „chybí nádech“) --------------------
 AIR_L = 2.5           # l: použitelný objem u školeného zpěváka/hráče
@@ -323,12 +328,48 @@ def _airflow(sr: int, sec: float, depth: float, kind: str, vowel: str, voice: st
     return _stereo(_edges(_ceiling(y), sr))
 
 
-def _breath(sr, bpm, kind, beats, depth, vowel, voice, variant):
+def _breath(sr, bpm, kind, beats, depth, vowel, voice, model, variant):
     if kind not in BREATH_KINDS:
         raise ValueError(f"neznámý druh nádechu {kind!r}; k dispozici: "
                          f"{', '.join(BREATH_KINDS)}")
     sec = float(beats) * 60.0 / float(bpm)
+    if model is not None and kind != "nose":
+        return _breath_data(sr, sec, depth, kind, vowel, model, variant)
     return _airflow(sr, sec, depth, kind, vowel, voice, variant, inhale=True)
+
+
+def _mean_speed(flow: np.ndarray) -> float:
+    """Rychlost proudu vážená energií turbulence (jako `_airflow`)."""
+    energy = _loudness(flow) ** 2
+    speed = np.clip(flow / FLOW_REF, 0.0, 1.6)
+    return float((energy * speed).sum() / max(1e-12, float(energy.sum())))
+
+
+def _breath_data(sr: int, sec: float, depth: float, kind: str, vowel: str,
+                 model: str, variant: int) -> np.ndarray:
+    """Nádech z modelu VocalSet (`breath.py`): barva a průběh skutečného
+    zpěváka, hlasitost a jas podle stejné fyziky jako `_airflow`.
+
+    Model zná přirozené nádechy zpěváka (mediánová délka). Kratší nebo
+    hlubší nádech, než je jeho zvyk, je rychlejší proud: zní hlasitěji
+    (kalibrace jako u fyzikálního dechu) a o `DATA_TILT` dB/okt na každé
+    zdvojnásobení rychlosti jasněji.
+    """
+    from . import breath as _data
+    m = _data.load(model)
+    n = max(16, int(round(float(sec) * sr)))
+    rng = _rng(37, variant)
+    flow = _flow(_inhale_profile(n, kind, rng), n / sr, depth)
+    env = _loudness(flow)
+    nat = max(0.05, float(m["dur"][1]))
+    u = (np.arange(256) + 0.5) / 256
+    ref = u ** 1.4 * (1.0 - u) ** 2.1
+    natural = _mean_speed(_flow(ref / ref.max(), nat, 0.6))
+    tilt = float(np.clip(DATA_TILT * math.log2(max(1e-6, _mean_speed(flow))
+                                                / max(1e-6, natural)), -4.0, 4.0))
+    y = _data.synth(m, n, sr, rng, vowel=vowel, tilt_db=tilt)
+    y *= float(np.sqrt(np.mean(env ** 2))) * BREATH_RMS / _REF_RMS
+    return _stereo(_edges(_ceiling(y), sr))
 
 
 def _exhale(sr, bpm, kind, beats, depth, vowel, voice, variant):

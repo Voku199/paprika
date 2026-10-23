@@ -61,7 +61,8 @@ VocalSet 1.2 (male_choir, basso, tenor, female_choir, soprano, alto)
   POVINNÉ při použití (i ve hře): uveď v titulcích
   "Vocals from VocalSet by J. Wilkins, P. Seetharaman, A. Wahl and B. Pardo,
   licensed under CC BY 4.0". Paprika nahrávky rozřezala na tóny a hluboké
-  tóny dopočítala posunem výšky (PSOLA).
+  tóny dopočítala posunem výšky (PSOLA). Z nádechů zpěváků mezi tóny
+  spočítala modely dechu (vocalset/breath/models.json) — stejná atribuce.
 """
 TARGET_RMS_DB = -18.0     # medián max RMS nejhlasitější vrstvy přes kořeny
 PEAK_CEILING = 0.9        # žádný vzorek nejhlasitější vrstvy nad tuhle špičku
@@ -336,6 +337,8 @@ def _install_vocalset(root: str, log) -> None:
             f.write(datetime.date.today().isoformat() + "\n")
     voices.build(root, log=log)
     log("voices: SFZ vygenerováno")
+    from . import breath
+    breath.build(root, log=log)
 
 
 def vsco_files(folders) -> list[tuple[str, int]]:

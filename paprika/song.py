@@ -732,23 +732,87 @@ class HumanTrack(SfxTrack):
                          (fabric, float(beats), motion,
                           self._variant("cloth", variant)), float(beats))
 
-    def steps(self, bars, every: float = 1.0, beat: float = 0.0,
-              surface: str = "stone", vel: int = 90):
-        """Kroky každých `every` beatů v rozsahu `bars=(od, do)`, střídavě
-        levá a pravá noha. Povrch: stone, wood, gravel, dirt."""
+    def steps(self, bars, every: float | None = None, beat: float = 0.0,
+              surface: str = "stone", vel: int = 90, *, pace: str | None = None,
+              speed=None, weight: float | None = None, jitter: float | None = None):
+        """Kroky v rozsahu `bars=(od, do)`, střídavě levá a pravá noha.
+        Povrch: stone, wood, gravel, dirt.
+
+        Bez `pace`/`speed`/`weight`/`jitter` je to pevný krok každých
+        `every` beatů (výchozí 1), jako dřív. S kterýmkoli z nich chodí
+        člověk (`gait.plan`): `pace` slow / walk / brisk / run nastaví
+        rychlost (0.9 / 1.4 / 1.9 / 3.2 m/s), `speed` ji dá přímo v m/s
+        nebo jako křivku `[(takt, m/s), ...]` (zrychlení). Interval je
+        z kadence při té rychlosti, pokud není dané `every`. `weight` je
+        váha chodce v kg (výchozí 75: těžší = hlasitější a hlubší),
+        `jitter` variační koeficient intervalu (výchozí 0.025, 0 = na
+        mřížce). Síla a barva kroků jsou korelované a levá noha se stále
+        liší od pravé podle `seed` stopy. Nad 2.2 m/s je to běh.
+        """
         if surface not in _human.SURFACES:
             raise ValueError(f"neznámý povrch {surface!r}; k dispozici: "
                              f"{', '.join(_human.SURFACES)}")
         lo, hi = (bars if isinstance(bars, (tuple, list)) else (bars, bars + 1))
-        if float(every) <= 0:
+        if every is not None and float(every) <= 0:
             raise ValueError("steps: every musí být kladné")
-        at = self._bar_to_beat(lo) + float(beat)
-        foot = 0
-        while at < self._bar_to_beat(hi) - 1e-9:
-            self._put("step", at, vel, (surface, foot, self._variant("step", None)))
-            at += float(every)
-            foot = 1 - foot
+        if pace is None and speed is None and weight is None and jitter is None:
+            every = 1.0 if every is None else float(every)
+            at = self._bar_to_beat(lo) + float(beat)
+            foot = 0
+            while at < self._bar_to_beat(hi) - 1e-9:
+                self._put("step", at, vel, (surface, foot, self._variant("step", None)))
+                at += every
+                foot = 1 - foot
+            return self
+        from . import gait as _gait
+        if pace is not None and pace not in _gait.PACES:
+            raise ValueError(f"neznámé tempo chůze {pace!r}; k dispozici: "
+                             f"{', '.join(_gait.PACES)}")
+        if pace is not None and speed is not None:
+            raise ValueError("steps: zadej buď pace, nebo speed, ne obojí")
+        curve = self._speed_curve(speed if speed is not None
+                                  else _gait.PACES[pace or "walk"])
+        kg = _gait.REF_KG if weight is None else float(weight)
+        if not _gait.MIN_KG <= kg <= _gait.MAX_KG:
+            raise ValueError(f"steps: weight je váha chodce v kg "
+                             f"({_gait.MIN_KG:.0f}–{_gait.MAX_KG:.0f}), ne {weight!r}")
+        jit = _gait.JITTER if jitter is None else float(jitter)
+        if not 0.0 <= jit <= 0.2:
+            raise ValueError(f"steps: jitter je variační koeficient intervalu "
+                             f"0..0.2, ne {jitter!r}")
+        walk = getattr(self, "_walks", 0)
+        self._walks = walk + 1
+        start = self._bar_to_beat(lo) + float(beat)
+        plan = _gait.plan(start, self._bar_to_beat(hi), self.song.bpm, curve,
+                          weight=kg, every=every, jitter=jit,
+                          walker=_gait.Walker(self.seed),
+                          seed=self.seed * 7919 + walk)
+        base = (self.seed * 7919 + walk) * 100_003
+        for k, st in enumerate(plan):
+            self._put("step", st.beat, vel, st.params(surface, base + k))
         return self
+
+    def _speed_curve(self, speed):
+        """Rychlost chůze: číslo (m/s) nebo body `[(takt, m/s), ...]` ->
+        funkce beatu (mezi body lineárně, za krajními body konstantní)."""
+        from . import gait as _gait
+        if isinstance(speed, (int, float)):
+            pts = [(0.0, float(speed))]
+        else:
+            try:
+                pts = sorted((self._bar_to_beat(b), float(v)) for b, v in speed)
+            except (TypeError, ValueError):
+                raise ValueError(f"steps: speed je m/s nebo [(takt, m/s), ...], "
+                                 f"ne {speed!r}") from None
+            if not pts:
+                raise ValueError("steps: speed bez bodů")
+        for _, v in pts:
+            if not _gait.MIN_SPEED <= v <= _gait.MAX_SPEED:
+                raise ValueError(f"steps: rychlost {v} m/s mimo "
+                                 f"{_gait.MIN_SPEED}–{_gait.MAX_SPEED}")
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        return lambda b: float(np.interp(b, xs, ys))
 
     # -- hlas -------------------------------------------------------------
     def _pitch(self, pitch, beat: float, gesture: str) -> float:

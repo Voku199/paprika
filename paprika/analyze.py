@@ -223,8 +223,10 @@ def _masking(song: Song, buffers: dict, warns: list) -> None:
 
 def _robotic(song: Song, warns: list) -> None:
     for t in song.tracks:
-        vels = ([h.velocity for h in t.hits] if isinstance(t, DrumTrack)
-                else [n.velocity for n in t.all_notes()])
+        # kroky z plánu chůze nesou sílu v parametrech (gait.plan), ne ve velocity
+        vels = ([h.velocity for h in t.hits
+                 if not (h.name == "step" and len(h.params) > 3)]
+                if isinstance(t, DrumTrack) else [n.velocity for n in t.all_notes()])
         if len(vels) >= 6 and float(np.std(vels)) == 0.0:
             warns.append(Warning_(
                 "WARN", t.name,

@@ -480,7 +480,7 @@ pad.fx(DynEQ(3500, threshold=-45, range_db=4, source="dech"))  # pad uhne dechu
 | `.lip_smack(bar, beat)` | mlasknutí rtů |
 | `.heartbeat(bars, every)` | tep „lub-dub“, systola se zkracuje s tepem |
 | `.cloth(bar, beat, beats, fabric, motion)` | šustění: cotton / nylon / wool, pohyb swing / fidget (profil minimálního trhnutí) |
-| `.steps(bars, every, surface)` | kroky střídavě levá/pravá: stone / wood / gravel / dirt |
+| `.steps(bars, every, surface)` | kroky střídavě levá/pravá: stone / wood / gravel / dirt; s `pace`/`speed`/`weight` chodí člověk (viz Chůze a běh) |
 | `.humanize(timing=None, vel, corr=0.6)` | časování (výchozí ±12 ms) i dynamika, korelovaně |
 
 `s.human(name, vol=0.35, performer=, voice=, section=False, mic=True,
@@ -498,6 +498,47 @@ konkrétní variantu (je jich 8).
 | `Proximity(dist=0.15, pattern="cardioid", max_db=12, hp=50)` | proximity efekt směrového mikrofonu: shelf 1. řádu (s + k·c/r) / (s + k·c/ref); kardioida na 5 cm +14.6 dB na 100 Hz, na 30 cm +2.3 dB. `dist` jde automatizovat |
 | `RoomTone(level=-66, color="pink", attack=0.08, release=0.5)` | šum místnosti jen tam, kde stopa zní (s náběhem a doběhem) — žádné digitální ticho pod blízkým zdrojem |
 | `DynEQ(freq, q, threshold, ratio, range_db, source=)` | zvon, který stáhne pásmo jen při přebytku energie (ostré nádechy); `source` = klíč z jiné stopy |
+
+### Chůze a běh
+
+Pevné `steps((0, 4), every=1)` je metronom: stejná síla, stejný odstup,
+každý krok jinak náhodný. Tak zní kroky „z kódu“. S `pace`, `speed`,
+`weight` nebo `jitter` chodí člověk (`paprika/gait.py`):
+
+```python
+telo = s.human("telo", seed=7)          # seed = který chodec (jeho nohy)
+telo.steps((0, 8), pace="walk", surface="gravel")             # 1.4 m/s, 75 kg
+telo.steps((8, 12), speed=[(8, 1.4), (12, 3.5)], weight=90)   # rozběhne se
+telo.steps((12, 16), pace="run", surface="dirt", every=1)     # běh na dobách
+```
+
+- **Časování.** Interval je z kadence při dané rychlosti (1.9 kroku/s při
+  1.4 m/s, ~3 při běhu), takže zrychlení zhustí kroky. Kroky se odchylují
+  od mřížky o 1/f šum (lidská chůze má dlouhou paměť), `jitter` je
+  variační koeficient intervalu (výchozí 0.025, `0` = přesně na mřížce).
+  Odchylka se počítá od mřížky, chodec hudbě neuteče. `every` dá pevný
+  průměrný interval v beatech (rychlost pak mění jen zvuk).
+- **Korelace.** Síla, jas, výška a odstup pata–špička se mění jako
+  Ornsteinův–Uhlenbeckův proces (korelace sousedů 0.6): sousední kroky jsou
+  příbuzné, vzdálené nezávislé. Silnější došlap je i jasnější.
+- **Nohy.** Levá a pravá noha se trvale liší (síla, jas, odstup, časování
+  v řádu procent) podle `seed` stopy — stejný chodec ve všech `steps()`.
+- **Fyzika.** Rychlost zkracuje kontakt a odstup paty a špičky a zjasní
+  klik. Nad 2.2 m/s je to běh: jeden silný dopad (reakční síla 2–3×
+  tělesné váhy). Váha zesílí a prohloubí dupnutí. Hlasitost není
+  normalizovaná: chůze 75 kg má špičku ~0.45, běh ~0.7 (při velocity 127).
+
+| Parametr | Hodnoty |
+|---|---|
+| `pace` | `slow` 0.9, `walk` 1.4, `brisk` 1.9, `run` 3.2 m/s |
+| `speed` | m/s (0.3–8), nebo křivka `[(takt, m/s), ...]`; nejde s `pace` |
+| `weight` | kg, 20–250 (výchozí 75) |
+| `jitter` | 0–0.2 (výchozí 0.025) |
+
+Hit nese sílu v parametrech, ne ve velocity, proto report u chůze nehlásí
+„všechny velocity stejné“. `humanize()` na stopě s chůzí už nepotřebuješ,
+posunul by kroky ještě navíc. Bez nových parametrů zní `steps()` bit po bitu
+jako dřív.
 
 ### Dech z nahrávek (VocalSet)
 
@@ -677,6 +718,7 @@ paprika/
   voices.py       VocalSet -> jednotlivé tóny (YIN, TD-PSOLA)
   breath.py       VocalSet -> nádechy -> model obálek (mel + PCA) -> syntéza
   human.py        dech, výdech, mlasknutí, tep, šustění, kroky, hlasová gesta (fyzika)
+  gait.py         chůze a běh: kadence, 1/f časování, korelované kroky, nohy (bez audia)
   corpus.py       korpus klipů lidských zvuků: síto, import, manifest, licence
   oscillators.py  filters.py  modulation.py  patch.py  presets.py
   fx.py  fx_space.py  fx_dyn.py  fx_lofi.py  fx_mic.py  mastering.py  automation.py
@@ -698,7 +740,7 @@ v [`docs/superpowers/specs/`](docs/superpowers/specs/).
 ## Testy
 
 ```bash
-python -m pytest tests/                                     # ~640 testů, bez sítě
+python -m pytest tests/                                     # ~660 testů, bez sítě
 python -m unittest discover tests                           # bez pytestu
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py        # vyrenderuje všechny songy
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # nainstalované nahrávky

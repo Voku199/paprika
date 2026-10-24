@@ -46,7 +46,7 @@ JITTER = 0.025        # variační koeficient intervalu (zdravá chůze 2–4 %)
 PINK_BETA = 0.8       # spektrum odchylek ~ 1/f^β
 MAX_SHIFT = 0.3       # krok se neposune o víc než 30 % intervalu
 BREAK = 1.8           # interval delší než 1.8× medián = chodec zastavil (nová chůze)
-LOCAL = 7             # kroků: okno klouzavého mediánu pro nepravidelnost
+LOCAL = 7             # kroků: okno lokální přímky pro nepravidelnost
 
 CORR = 0.6            # AR(1) korelace parametrů sousedních kroků
 # směrodatné odchylky OU procesů (log poměr): síla, odstup, poměr špičky, jas, výška
@@ -148,24 +148,27 @@ class StepSpec:
     bright: float
     pitch: float
 
-    def params(self, surface: str, variant: int) -> tuple:
-        """Parametry hitu `step` (variant poslední, jako u všech generátorů)."""
+    def params(self, surface, variant: int, shoe: str = "boot",
+               gear: str | None = None) -> tuple:
+        """Parametry hitu `step` pro `foley.footstep` (variant poslední, jako
+        u všech generátorů). `surface` je jméno nebo přechod `(a, b, w)`."""
         r = lambda x: round(float(x), 4)  # noqa: E731 — stabilní klíč cache
         return (surface, int(self.foot), r(self.weight), r(self.speed), r(self.level),
-                r(self.gap), r(self.ratio), r(self.bright), r(self.pitch), int(variant))
+                r(self.gap), r(self.ratio), r(self.bright), r(self.pitch), shoe, gear,
+                int(variant))
 
 
 def plan(start: float, end: float, bpm: float, speed: Callable[[float], float],
          weight: float = REF_KG, every: float | None = None,
          jitter: float = JITTER, walker: Walker | None = None,
-         seed: int = 0) -> list[StepSpec]:
+         seed: int = 0, first_foot: int = 0) -> list[StepSpec]:
     """Kroky v rozsahu beatů `[start, end)`.
 
     Interval je `every` beatů, nebo (bez `every`) z kadence při rychlosti
     `speed(beat)` m/s — zrychlení tedy zhustí kroky. Krok se posune od
     mřížky o 1/f šum, jehož interval má variační koeficient `jitter`.
     Parametry kroku jsou korelované přes kroky (OU, `CORR`) a nesou stálé
-    rozdíly nohou z `walker`.
+    rozdíly nohou z `walker`. První krok dělá noha `first_foot` (0 levá).
     """
     if end <= start:
         return []
@@ -202,7 +205,7 @@ def plan(start: float, end: float, bpm: float, speed: Callable[[float], float],
         if k:
             z = {name: CORR * v + innov * float(rng.standard_normal())
                  for name, v in z.items()}
-        foot = k % 2
+        foot = (k + int(first_foot)) % 2
         t = beat + (float(e[k]) + walker.shift(foot)) * gaps[k]
         bright_z = (BRIGHT_FROM_LEVEL * z["level"]
                     + math.sqrt(1.0 - BRIGHT_FROM_LEVEL ** 2) * z["bright"])
@@ -237,8 +240,8 @@ def walks(beats, min_steps: int = 3) -> list[np.ndarray]:
 
 
 def irregularity(beats) -> float | None:
-    """Nepravidelnost kroků: rozptyl intervalu kolem klouzavého mediánu
-    (`LOCAL` kroků), takže zrychlení ani zastavení se nepočítají. Pro
+    """Nepravidelnost kroků: rozptyl intervalu kolem lokální přímky přes
+    `LOCAL` kroků, takže zrychlení ani zastavení se nepočítají. Pro
     stálé tempo je to variační koeficient intervalu; 0 = metronom.
     `None`, když není aspoň 8 kroků v souvislé chůzi."""
     dev = []
@@ -246,7 +249,11 @@ def irregularity(beats) -> float | None:
         d = np.diff(w)
         half = LOCAL // 2
         for i in range(d.size):
-            local = float(np.median(d[max(0, i - half):i + half + 1]))
+            lo, hi = max(0, i - half), min(d.size, i + half + 1)
+            k = np.arange(lo, hi)
+            # lokální přímka: zrychlení i zpomalení se odečte, zbude jitter
+            fit = np.polyfit(k, d[lo:hi], 1) if k.size >= 3 else (0.0, float(d[lo:hi].mean()))
+            local = float(np.polyval(fit, i))
             if local > 0:
                 dev.append(d[i] / local - 1.0)
     return float(np.std(dev)) if len(dev) >= 6 else None

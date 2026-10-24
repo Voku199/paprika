@@ -6,7 +6,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from paprika import Song, gait, metrics, model_warnings  # noqa: E402
+from paprika import Song, foley, gait, metrics, model_warnings  # noqa: E402
 from paprika.analyze import check_report, step_stats, warnings_for  # noqa: E402
 from paprika.render import render_song  # noqa: E402
 from paprika.human import CEILING  # noqa: E402
@@ -143,7 +143,7 @@ class TestStepAudio(unittest.TestCase):
     @staticmethod
     def _one(surface="stone", weight=75.0, speed=1.4, variant=0, foot=0):
         return render_sfx("step", (surface, foot, weight, speed, 1.0, 1.0, 1.0, 1.0,
-                                   1.0, variant), SR, 120)
+                                   1.0, "boot", None, variant), SR, 120)
 
     def test_legacy_step_unchanged(self):
         # pevný krok bez plánu chůze musí zůstat bit-identický se starými songy
@@ -157,7 +157,7 @@ class TestStepAudio(unittest.TestCase):
         self.assertTrue(all(len(x.params) == 3 for x in h.hits))
 
     def test_bounded_on_all_surfaces(self):
-        for surface in ("stone", "wood", "gravel", "dirt"):
+        for surface in foley.SURFACES:
             for weight, speed in ((40, 0.9), (75, 1.4), (120, 3.5), (250, 8.0)):
                 y = self._one(surface, weight, speed)
                 self.assertTrue(np.all(np.isfinite(y)))
@@ -165,10 +165,12 @@ class TestStepAudio(unittest.TestCase):
                 self.assertGreater(float(np.abs(y).max()), 0.05)
 
     def test_reference_level(self):
-        peaks = [float(np.abs(render_sfx("step", ("stone", 0, 75.0, 1.4, 1.0, 1.0, 1.0, 1.0,
-                                                  1.0, v), 44100, 120)).max())
-                 for v in range(30)]
-        self.assertAlmostEqual(float(np.median(peaks)), 0.45, delta=0.06)
+        for surface, target in foley.SURFACE_TARGET.items():
+            peaks = [float(np.abs(render_sfx("step", (surface, v % 2, 75.0, 1.4, 1.0, 1.0,
+                                                      1.0, 1.0, 1.0, "boot", None, v),
+                                             44100, 120)).max())
+                     for v in range(30)]
+            self.assertAlmostEqual(float(np.median(peaks)), target, delta=0.06, msg=surface)
 
     def test_heavier_and_faster_louder(self):
         def med(**kw):
@@ -184,8 +186,13 @@ class TestStepAudio(unittest.TestCase):
         self.assertGreater(run, slow * 1.1)
 
     def test_bad_params(self):
-        for params in (("stone", 0, 10.0, 1.4, 1, 1, 1, 1, 1, 0),
-                       ("stone", 0, 75.0, 20.0, 1, 1, 1, 1, 1, 0),
+        for params in (("stone", 0, 10.0, 1.4, 1, 1, 1, 1, 1, "boot", None, 0),
+                       ("stone", 0, 75.0, 20.0, 1, 1, 1, 1, 1, "boot", None, 0),
+                       ("ice", 0, 75.0, 1.4, 1, 1, 1, 1, 1, "boot", None, 0),
+                       ("stone", 0, 75.0, 1.4, 1, 1, 1, 1, 1, "clogs", None, 0),
+                       ("stone", 0, 75.0, 1.4, 1, 1, 1, 1, 1, "boot", "sword", 0),
+                       (("stone", "mud", 1.5), 0, 75.0, 1.4, 1, 1, 1, 1, 1, "boot", None, 0),
+                       ("stone", 0, 75.0, 1.4, 1, 1, 1, 1, 1, 0),
                        ("stone", 0, 75.0, 1.4, 0)):
             with self.assertRaises(ValueError, msg=params):
                 render_sfx("step", params, SR, 120)
@@ -205,7 +212,7 @@ class TestIrregularity(unittest.TestCase):
         self.assertLess(gait.irregularity([p.beat for p in ramp]), 0.02)
         two = list(range(10)) + [30 + i for i in range(10)]
         self.assertEqual(len(gait.walks(two)), 2)
-        self.assertEqual(gait.irregularity(two), 0.0)
+        self.assertAlmostEqual(gait.irregularity(two), 0.0, places=9)
 
     def test_too_few(self):
         self.assertIsNone(gait.irregularity([0, 1, 2, 3]))

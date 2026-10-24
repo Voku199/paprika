@@ -51,7 +51,8 @@ verification tool after every change to a song.
 presets, drum chars, warning rules). Read it before writing a song file.
 `docs/superpowers/specs/2026-08-12-paprika-design.md` records the v1 design,
 `2026-09-23-engine-v2-design.md` the v2 engine. `songs/v2_showcase.py`
-exercises every v2 feature. `examples/` holds the five public README demos
+exercises every v2 feature, `songs/kroky.py` the gait + foley steps.
+`examples/` holds the five public README demos
 (sampled instruments only — piano, strings, voices, orchestra; keep them
 realistic, not synth); `tools/readme_media.py` regenerates
 `docs/images/*.png` and `docs/audio/*.mp3` from them (needs matplotlib +
@@ -78,7 +79,7 @@ python -m paprika samples human request laugh --backend dia --out req.json  # wo
 python tools/human_worker.py req.json --out incoming/    # run models (own venv w/ torch)
 python -m paprika samples human import incoming/         # sieve -> human/ corpus
 
-python -m pytest tests/                                  # ~670 tests, ~65 s
+python -m pytest tests/                                  # ~690 tests, ~75 s
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py     # renders every song, ~2 min
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # installed samples: level + tuning
 python -m pytest tests/test_render.py::TestLimiter::test_tames_overs
@@ -146,26 +147,50 @@ Layer boundaries are deliberately sharp — keep them:
   AR(1)/OU process across steps (`CORR`), and a `Walker(seed)` with fixed
   left/right foot differences. `physics(weight, speed)` gives contact time,
   heel–toe gap, level (GRF^0.6), pitch and brightness; ≥ 2.2 m/s is a run.
-  `HumanTrack.steps(pace=/speed=/weight=/jitter=)` uses it; hit params are
-  `(surface, foot, weight, speed, level, gap, ratio, bright, pitch, variant)`
-  and `human._step` maps them to audio with a fixed `STEP_GAIN` (no
-  per-instance normalization). Without those args `steps()` keeps the old
-  3-tuple `(surface, foot, variant)` and is bit-identical
+  `irregularity` = interval spread around a local line over 7 steps (ramps
+  and stops don't count; `walks` splits at stops) — the F2 metronome metric.
+- `foley.py` — a gait step as layers, audio (F3): one GRF curve per step
+  (`grf`: walk two humps, run one, plus heel spike) drives everything.
+  Impact = Hertz half-sine pulse of `contact_ms(shoe, surface, speed)`;
+  its spectrum `pulse_gain` weights each surface mode, the body thud and
+  the click (the click uses `CLICK_EDGE`× shorter contact — with the full
+  pulse a boot on stone had no click, 95 % energy < 200 Hz). Friction
+  (heel slide ~v^0.5, toe roll capped at 2× ref speed — linear growth made
+  friction dominate running), debris grains at `rate·dF/dt⁺ + sustain·F`
+  with a settle tail, mud (splat, suction chirp, bubbles), snow squeak,
+  gear (`GEARS`, centered, after an inertial delay). `Surface` dataclasses
+  in `SURFACES` (8), `SHOES`, fixed `SURFACE_GAIN` calibrated so the
+  reference walker's median peak equals `SURFACE_TARGET` (grass quieter
+  than stone; recalibrate when changing a surface). A surface may be a
+  blend `(a, b, w)`: both rendered, power-weighted; w = 0 / 1 is
+  bit-identical to the pure surface.
+  `HumanTrack.steps(pace=/speed=/weight=/jitter=/shoe=/gear=/cloth=/blend=)`
+  or a surface the fixed table lacks (or a `[(bar, surface)]` path) takes
+  this path; hit params are `(surface, foot, weight, speed, level, gap,
+  ratio, bright, pitch, shoe, gear, variant)` with a unique `variant` int
+  (noise never repeats after 8). `cloth=` adds separate `cloth` hits in
+  the leg-swing phase. A `steps()` starting < 1.5 intervals after the
+  track's last gait step continues it (next step one interval later,
+  other foot, speed ramped over `CONTINUE_STEPS`) — found by the F2
+  metric: walk→run stumbled 0.23 beats at the bar line. Fixed `steps()`
+  (stone/wood/gravel/dirt, no new args) keep `human.SURFACES` and the
+  3-tuple `(surface, foot, variant)`, bit-identical
   (`tests/test_gait.py::test_legacy_step_unchanged`). `analyze._robotic`
-  ignores gait steps (their dynamics are in params, not velocity). Research
-  and roadmap F1–F5: `docs/superpowers/research/2026-10-24-foley-kroky-pruzkum.md`
-  (F1 and F2 done; F3 = layers and new surfaces is next). F2 is the
-  feedback loop for steps: `gait.irregularity` (interval spread around a
-  7-step running median, so ramps and stops don't count; `walks` splits at
-  stops), `metrics.step_stats` (per-step windows from model onsets:
-  waveform similarity **above 1 kHz only** — the thud sine is nearly
-  identical in every step and would make unique steps look like copies —,
-  copies ≥ `STEP_COPY`, level spread, centroid), `analyze.step_stats`
-  (+ feet difference, bar-slice offset) feeding the `KROKY` report line,
-  `check` line, model rules `_step_model` (metronome, repeated params)
-  and audio rule `_step_audio` (equal levels, copies the params don't
+  ignores gait steps (their dynamics are in params, not velocity).
+  Research and roadmap F1–F5:
+  `docs/superpowers/research/2026-10-24-foley-kroky-pruzkum.md` (F1–F3
+  done; F4 = sample -> model from real recordings is next).
+- Step feedback (F2): `metrics.step_stats` (per-step windows from model
+  onsets, zero-padded before buffer start; waveform similarity **above
+  1 kHz only** — the thud sine is nearly identical in every step and made
+  unique steps look like copies —, copies ≥ `STEP_COPY`, level spread,
+  centroid), `analyze.step_stats` (+ feet difference, bar-slice offset,
+  first `STEP_MAX` = 64 steps) feeding the `KROKY` report line, the
+  `check` line, model rules `_step_model` (metronome, repeated params) and
+  audio rule `_step_audio` (equal levels, copies the params don't
   explain). The report computes step stats once and passes them to
-  `warnings_for(..., bars=, steps=)`.
+  `warnings_for(..., bars=, steps=)`. Metal steps reach similarity ~0.94
+  (fixed plate modes) — still below the copy threshold.
 - `corpus.py` — clip corpus for human sounds the physics can't fake (laugh,
   cough, throat, gasp, sniff, scream, cloth, steps ...) under
   `<samples>/human/`. Clips come from `tools/human_worker.py` (a separate

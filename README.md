@@ -77,6 +77,10 @@ vyrenderované přesně z nich, bez jakékoliv úpravy v jiném programu.
   z modelu hlasivek a hlasového traktu, mlasknutí, tep, šustění oblečení
   a kroky, blízký mikrofon s proximity efektem a šumem místnosti. Report
   hlídá, že nádech nejde přes noty a fráze se vejde do jednoho nádechu.
+- **Kroky jako ve hře.** Chůze a běh s lidským časováním, korelovanou
+  silou a asymetrií nohou; krok z vrstev (dopad, tření, úlomky, bláto,
+  výbava, oblečení) na osmi površích s plynulými přechody. Report měří,
+  jestli kroky nezní jako smyčka nebo metronom.
 - **MIDI export** do jakékoliv DAW, když budeš chtít skladbu dodělat jinde.
 - **Syntéza, když je potřeba.** 37 ručně napsaných presetů (pady, basy,
   sbor přes formanty, 808…), bicí sady a cinematic efekty (riser, impact,
@@ -484,7 +488,7 @@ pad.fx(DynEQ(3500, threshold=-45, range_db=4, source="dech"))  # pad uhne dechu
 | `.lip_smack(bar, beat)` | mlasknutí rtů |
 | `.heartbeat(bars, every)` | tep „lub-dub“, systola se zkracuje s tepem |
 | `.cloth(bar, beat, beats, fabric, motion)` | šustění: cotton / nylon / wool, pohyb swing / fidget (profil minimálního trhnutí) |
-| `.steps(bars, every, surface)` | kroky střídavě levá/pravá: stone / wood / gravel / dirt; s `pace`/`speed`/`weight` chodí člověk (viz Chůze a běh) |
+| `.steps(bars, every, surface, pace=, speed=, weight=, shoe=, gear=, cloth=)` | kroky střídavě levá/pravá; pevné (stone / wood / gravel / dirt), nebo chůze člověka z vrstev na 8 površích (viz Chůze a běh) |
 | `.humanize(timing=None, vel, corr=0.6)` | časování (výchozí ±12 ms) i dynamika, korelovaně |
 
 `s.human(name, vol=0.35, performer=, voice=, section=False, mic=True,
@@ -506,15 +510,48 @@ konkrétní variantu (je jich 8).
 ### Chůze a běh
 
 Pevné `steps((0, 4), every=1)` je metronom: stejná síla, stejný odstup,
-každý krok jinak náhodný. Tak zní kroky „z kódu“. S `pace`, `speed`,
-`weight` nebo `jitter` chodí člověk (`paprika/gait.py`):
+osm variant dokola. Tak zní kroky „z kódu“. S kterýmkoli z parametrů níž
+(nebo na povrchu, který pevné kroky neznají) chodí člověk: časování a síla
+z `paprika/gait.py`, zvuk z vrstev v `paprika/foley.py`. Celá ukázka:
+[`songs/kroky.py`](songs/kroky.py).
 
 ```python
 telo = s.human("telo", seed=7)          # seed = který chodec (jeho nohy)
-telo.steps((0, 8), pace="walk", surface="gravel")             # 1.4 m/s, 75 kg
-telo.steps((8, 12), speed=[(8, 1.4), (12, 3.5)], weight=90)   # rozběhne se
-telo.steps((12, 16), pace="run", surface="dirt", every=1)     # běh na dobách
+telo.steps((0, 8), pace="walk", surface="gravel", gear="keys")  # 1.4 m/s, 75 kg
+telo.steps((8, 12), speed=[(8, 1.4), (12, 3.5)], weight=90,     # rozběhne se
+           surface="snow", cloth="nylon")                       # navazuje
+telo.steps((12, 16), surface=[(12, "stone"), (14, "grass")], blend=2.0,
+           shoe="sneaker")                                      # z cesty do trávy
 ```
+
+**Vrstvy kroku.** Každá je fyzikální model řízený reakční silou podložky
+F(t) během kontaktu chodidla (chůze: dva vrcholy, pata a odraz; běh: jeden):
+
+- *dopad* — bota narazí na podložku na dobu τ (Hertzův kontakt: podrážka
+  na kameni ~0.5 ms, bosá noha v blátě ~20 ms). Silový pulz má spektrum
+  `cos(π f τ) / (1 − (2 f τ)²)`, takže měkký kontakt sám utlumí výšky.
+  Pulz rozezní rezonance podložky, dupnutí nohy a klik hrany podrážky
+  (ten má pětkrát kratší kontakt). Pata dopadne v 0, špička po odstupu.
+  Rezonance mají u každého kroku jinou amplitudu a o pár procent jinou
+  výšku — chodidlo dopadne pokaždé jinam;
+- *tření* — smyk paty při dopadu a odval špičky při odrazu (s rychlostí
+  roste, s mezí);
+- *úlomky* — zrna s četností `rate · max(0, dF/dt) + sustain · F`: štěrk,
+  tráva a sníh praskají, když síla roste, sníh drtí i pod stálou vahou,
+  kamínky dosedají ještě po odlepení;
+- *bláto* — mlasknutí při dopadu, sání a bublinky po odlepení;
+  *sníh* — vrzání stlačených krystalů;
+- *výbava* (`gear`) — kousky kovu na trupu do sebe narazí se setrvačným
+  zpožděním po dopadu a slaběji při odrazu, ve středu sterea;
+- *oblečení* (`cloth`) — vlastní hit `cloth` ve fázi švihu nohy mezi
+  kroky, hlasitější s rychlostí.
+
+Povrch může být cesta `[(takt, povrch), ...]`: kolem každé změny trvá
+přechod `blend` beatů a oba povrchy znějí zároveň (výkonově, váha roste
+lineárně). Navazuje-li `steps()` méně než 1.5 intervalu po posledním kroku
+předchozí chůze na stejné stopě, další krok přijde o interval později
+druhou nohou a rychlost se převede za 3 kroky — přechod z chůze do běhu
+nezakopne.
 
 - **Časování.** Interval je z kadence při dané rychlosti (1.9 kroku/s při
   1.4 m/s, ~3 při běhu), takže zrychlení zhustí kroky. Kroky se odchylují
@@ -530,7 +567,7 @@ telo.steps((12, 16), pace="run", surface="dirt", every=1)     # běh na dobách
 - **Fyzika.** Rychlost zkracuje kontakt a odstup paty a špičky a zjasní
   klik. Nad 2.2 m/s je to běh: jeden silný dopad (reakční síla 2–3×
   tělesné váhy). Váha zesílí a prohloubí dupnutí. Hlasitost není
-  normalizovaná: chůze 75 kg má špičku ~0.45, běh ~0.7 (při velocity 127).
+  normalizovaná: tráva je tišší než kámen a běh hlasitější než chůze.
 
 | Parametr | Hodnoty |
 |---|---|
@@ -538,6 +575,27 @@ telo.steps((12, 16), pace="run", surface="dirt", every=1)     # běh na dobách
 | `speed` | m/s (0.3–8), nebo křivka `[(takt, m/s), ...]`; nejde s `pace` |
 | `weight` | kg, 20–250 (výchozí 75) |
 | `jitter` | 0–0.2 (výchozí 0.025) |
+| `surface` | `stone`, `wood`, `metal`, `gravel`, `dirt`, `grass`, `snow`, `mud`, nebo cesta `[(takt, povrch), ...]` |
+| `blend` | délka přechodu povrchů v beatech (výchozí 1) |
+| `shoe` | `boot` (výchozí), `sneaker` (měkčí, tišší), `heels` (tvrdý ostrý klik), `bare` (tichá, tmavá) |
+| `gear` | `keys`, `chain`, `armor` |
+| `cloth` | `cotton`, `nylon`, `wool` |
+
+Povrchy změřené na referenčním chodci (75 kg, 1.4 m/s, boot, špička při
+velocity 127, medián 40 variant):
+
+| Povrch | Špička | Běh 3.2 m/s | Těžiště | Nad 4 kHz | Doznění −30 dB | Charakter |
+|---|---|---|---|---|---|---|
+| stone | 0.45 | 0.85 | 850 Hz | 9 % | 0.57 s | dupnutí + ostrý klik |
+| wood | 0.43 | 0.72 | 270 Hz | 0 % | 0.56 s | duté prkno (180–2100 Hz) |
+| metal | 0.49 | 0.80 | 770 Hz | 1 % | 0.76 s | zvonivý plech, nejdelší |
+| gravel | 0.46 | 0.70 | 1040 Hz | 10 % | 0.56 s | křupání + dosedání kamínků |
+| dirt | 0.34 | 0.57 | 250 Hz | 1 % | 0.56 s | tlumené, trochu drobků |
+| grass | 0.32 | 0.46 | 1560 Hz | 17 % | 0.53 s | šustění vysoko |
+| snow | 0.46 | 0.62 | 2710 Hz | 22 % | 0.53 s | husté křupání + vrzání |
+| mud | 0.40 | 0.67 | 130 Hz | 0 % | 0.70 s | mlasknutí, sání, bublinky |
+
+Doznění ~0.55 s je celý kontakt chodidla (odval špičky na konci), ne dozvuk.
 
 **Kontrola bez poslechu.** Report po renderu má pro každou lidskou stopu
 s kroky řádek `KROKY`, `check` jeho modelovou část:
@@ -549,20 +607,21 @@ KROKY    stary: 48 kroků   nepravidelnost 0.0 %   kopie 40/48   podobnost max 1
 
 | Metrika | Co znamená |
 |---|---|
-| nepravidelnost | rozptyl intervalu kolem klouzavého mediánu 7 kroků (zrychlení ani zastavení se nepočítají); 0 % = metronom, chůze 2–4 % |
+| nepravidelnost | rozptyl intervalu kolem lokální přímky přes 7 kroků (zrychlení ani zastavení se nepočítají); 0 % = metronom, chůze 2–4 % |
 | kopie | kolik kroků zní jako kopie dřívějšího: podobnost tvaru vlny nad 1 kHz ≥ 0.98 v posunu ±2 ms. Pod 1 kHz je tlumený sinus dupnutí, ten je u všech kroků skoro stejný a kopii by neodlišil |
-| podobnost max | nejpodobnější pár kroků (1.00 = tentýž vzorek; unikátní kroky z chůze ~0.2–0.5) |
+| podobnost max | nejpodobnější pár kroků (1.00 = tentýž vzorek; unikátní kroky z chůze ~0.1–0.45, na kovu až ~0.94 — rezonance plechu jsou pevné) |
 | síla | směrodatná odchylka špiček v dB |
 | těžiště | medián spektrálního těžiště kroku (dupnutí ho táhne dolů: hlína ~80 Hz) |
 | levá−pravá | rozdíl mediánu špiček levé a pravé nohy v dB (stálá asymetrie chodce, ne pan) |
 
 Okno kroku je 200 ms od 5 ms před nástupem (zkrácené před dalším krokem),
-nástupy bere z datového modelu, takže sedí i s `--bars`.
+nástupy bere z datového modelu, takže sedí i s `--bars`. Do párového
+srovnání jde prvních 64 kroků stopy (`93 kroků (měřeno 64)`).
 
 Hit nese sílu v parametrech, ne ve velocity, proto report u chůze nehlásí
 „všechny velocity stejné“. `humanize()` na stopě s chůzí už nepotřebuješ,
-posunul by kroky ještě navíc. Bez nových parametrů zní `steps()` bit po bitu
-jako dřív.
+posunul by kroky ještě navíc. Bez nových parametrů na povrchu stone / wood /
+gravel / dirt zní `steps()` bit po bitu jako dřív.
 
 ### Dech z nahrávek (VocalSet)
 
@@ -743,6 +802,7 @@ paprika/
   breath.py       VocalSet -> nádechy -> model obálek (mel + PCA) -> syntéza
   human.py        dech, výdech, mlasknutí, tep, šustění, kroky, hlasová gesta (fyzika)
   gait.py         chůze a běh: kadence, 1/f časování, korelované kroky, nohy (bez audia)
+  foley.py        krok z vrstev: dopad, tření, úlomky, bláto, výbava; 8 povrchů, boty
   corpus.py       korpus klipů lidských zvuků: síto, import, manifest, licence
   oscillators.py  filters.py  modulation.py  patch.py  presets.py
   fx.py  fx_space.py  fx_dyn.py  fx_lofi.py  fx_mic.py  mastering.py  automation.py
@@ -751,7 +811,7 @@ paprika/
   midi.py         MIDI export a čtení
   viz.py  cli.py  ASCII výstup a příkazová řádka
 examples/         pět ukázek z tohoto README
-songs/            delší skladby (v2_showcase, divadlo, romantic, dech, hlas)
+songs/            delší skladby (v2_showcase, divadlo, romantic, dech, hlas, kroky)
 tools/            readme_media.py — obrázky a MP3 pro README;
                   human_worker.py — neuronové modely pro korpus (vlastní venv)
 ```
@@ -764,7 +824,7 @@ v [`docs/superpowers/specs/`](docs/superpowers/specs/).
 ## Testy
 
 ```bash
-python -m pytest tests/                                     # ~670 testů, bez sítě
+python -m pytest tests/                                     # ~690 testů, bez sítě
 python -m unittest discover tests                           # bez pytestu
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py        # vyrenderuje všechny songy
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # nainstalované nahrávky

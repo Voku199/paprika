@@ -477,6 +477,7 @@ def step_stats(song: Song, buffers: dict, bars=None) -> dict:
         st["irregularity"] = _gait.irregularity([h.start_beat for h in hits])
         st["params_repeats"] = _param_repeats(hits)[0]
         st["hits"] = [by_onset.get(s) for s in st["starts"]]
+        st["total"] = len(hits)
         out[t.name] = st
     return out
 
@@ -504,7 +505,9 @@ def _step_audio(song: Song, stats: dict, warns: list) -> None:
 
 def _fmt_steps(name: str, st: dict) -> str:
     irr = st.get("irregularity")
-    parts = [f"{name}: {st['n']} kroků",
+    total = st.get("total", st["n"])
+    measured = f" (měřeno {st['n']})" if st["n"] < total else ""
+    parts = [f"{name}: {total} kroků{measured}",
              "nepravidelnost " + ("—" if irr is None else f"{100 * irr:.1f} %"),
              f"kopie {st['repeats']}/{st['n']}",
              f"podobnost max {st['sim_max']:.2f}",

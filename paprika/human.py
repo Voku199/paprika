@@ -35,7 +35,7 @@ import math
 import numpy as np
 from scipy import signal
 
-from . import dsp, gait
+from . import dsp, foley
 from .filters import FORMANTS, VOWELS, Tract
 from .oscillators import glottal
 
@@ -102,6 +102,8 @@ FABRICS = {
     "nylon": (2600.0, (5200.0, 0.8), (2200.0, 0.9), 0.55),
     "wool": (700.0, (1400.0, 0.8), (500.0, 0.9), 0.12),
 }
+# pevné kroky bez plánu chůze (steps() bez pace/speed/...); chůze bere
+# parametrické povrchy z foley.SURFACES
 SURFACES = {
     # dupnutí (Hz, τ s, amp), klik (Hz, τ s, amp), rezonance (Hz, τ, amp) nebo
     # None, zrna (četnost /s, pásmo Hz, délka s)
@@ -110,9 +112,6 @@ SURFACES = {
     "gravel": ((80.0, 0.03, 0.4), (2500.0, 0.004, 0.6), None, (2500.0, 3500.0, 0.07)),
     "dirt": ((70.0, 0.04, 0.6), (1500.0, 0.004, 0.5), None, (600.0, 1500.0, 0.05)),
 }
-# pevný zisk kroku z plánu chůze: referenční chodec (75 kg, 1.4 m/s) má
-# medián špičky 0.45, aby běh (~0.7) i těžší chodec měli kam růst pod CEILING
-STEP_GAIN = {"stone": 0.335, "wood": 0.393, "gravel": 0.499, "dirt": 0.623}
 
 
 # --------------------------------------------------------------------------
@@ -456,18 +455,15 @@ def _cloth(sr, bpm, fabric, beats, motion, variant):
     return _stereo(_edges(_peak(crackle + hiss, 0.6), sr))
 
 
-def _strike(n: int, sr: int, surface, strength: float, rng, pitch: float = 1.0,
-            bright: float = 1.0, decay: float = 1.0) -> np.ndarray:
+def _strike(n: int, sr: int, surface, strength: float, rng) -> np.ndarray:
     (thud_f, thud_tau, thud_a), (click_f, click_tau, click_a), res, grains = surface
     t = np.arange(n) / sr
-    y = (thud_a * np.sin(TWO_PI * thud_f * rng.uniform(0.95, 1.05) * pitch * t)
-         * np.exp(-t / (thud_tau * decay)))
+    y = thud_a * np.sin(TWO_PI * thud_f * rng.uniform(0.95, 1.05) * t) * np.exp(-t / thud_tau)
     click = rng.standard_normal(n) * np.exp(-t / click_tau)
-    y += click_a * dsp.filt(click, "bp", min(click_f * rng.uniform(0.9, 1.1) * bright,
-                                             0.4 * sr), sr, q=1.2)
+    y += click_a * dsp.filt(click, "bp", click_f * rng.uniform(0.9, 1.1), sr, q=1.2)
     if res is not None:
         rf, rtau, ra = res
-        y += ra * np.sin(TWO_PI * rf * rng.uniform(0.97, 1.03) * pitch * t) * np.exp(-t / rtau)
+        y += ra * np.sin(TWO_PI * rf * rng.uniform(0.97, 1.03) * t) * np.exp(-t / rtau)
     if grains is not None:
         g_rate, g_f, g_len = grains
         dens = g_rate * np.exp(-t / (g_len / 3.0))
@@ -481,41 +477,25 @@ def _strike(n: int, sr: int, surface, strength: float, rng, pitch: float = 1.0,
 def _step(sr, bpm, surface, foot, *rest):
     """Krok: pata a o 35–70 ms později špička, levá a pravá noha se liší.
 
-    `rest` je buď jen `(variant,)` (pevný krok, jako dřív), nebo z plánu
-    chůze `gait.plan`: `(weight, speed, level, gap, ratio, bright, pitch,
-    variant)` — váha a rychlost dávají fyziku (`gait.physics`), ostatní
-    jsou korelované násobky kolem 1. Hlasitost pak není normalizovaná:
-    těžší a rychlejší chodec je hlasitější.
+    `rest` je buď jen `(variant,)` — pevný krok z tabulky `SURFACES`,
+    jako dřív (bit-identický) — nebo z plánu chůze `gait.plan`: `(weight,
+    speed, level, gap, ratio, bright, pitch, shoe, gear, variant)`. Ten
+    krok skládá z vrstev `foley.footstep` (dopad, tření, úlomky, bláto,
+    výbava) a `surface` může být i přechod `(a, b, w)`.
     """
+    if len(rest) == 10:
+        return foley.footstep(sr, surface, foot, *rest)
+    if len(rest) != 1:
+        raise ValueError(f"step: čekám (variant,) nebo 10 parametrů chůze, ne {rest!r}")
     if surface not in SURFACES:
         raise ValueError(f"neznámý povrch {surface!r}; k dispozici: {', '.join(SURFACES)}")
     spec = SURFACES[surface]
     n = int(0.35 * sr)
-    if len(rest) == 1:
-        rng = _rng(29, rest[0])
-        y = _strike(n, sr, spec, 1.0, rng)
-        gap = int(rng.uniform(0.035, 0.07) * sr)
-        y[gap:] += _strike(n - gap, sr, spec, rng.uniform(0.5, 0.7), rng)
-        y = _peak(y, 0.8)
-    elif len(rest) == 8:
-        weight, speed, level, gap_k, ratio_k, bright, pitch, variant = rest
-        if not gait.MIN_KG <= float(weight) <= gait.MAX_KG:
-            raise ValueError(f"váha chodce {weight!r} kg mimo "
-                             f"{gait.MIN_KG:.0f}–{gait.MAX_KG:.0f}")
-        if not gait.MIN_SPEED <= float(speed) <= gait.MAX_SPEED:
-            raise ValueError(f"rychlost {speed!r} m/s mimo "
-                             f"{gait.MIN_SPEED}–{gait.MAX_SPEED}")
-        ph = gait.physics(weight, speed)
-        rng = _rng(29, variant)
-        tone = dict(pitch=ph.pitch * float(pitch), bright=ph.bright * float(bright),
-                    decay=ph.decay)
-        y = _strike(n, sr, spec, 1.0, rng, **tone)
-        gap = int(np.clip(ph.gap * float(gap_k) * rng.uniform(0.9, 1.1), 0.005, 0.2) * sr)
-        y[gap:] += _strike(n - gap, sr, spec,
-                           ph.ratio * float(ratio_k) * rng.uniform(0.9, 1.1), rng, **tone)
-        y = _ceiling(y * (STEP_GAIN[surface] * ph.level * float(level)))
-    else:
-        raise ValueError(f"step: čekám (variant,) nebo 8 parametrů chůze, ne {rest!r}")
+    rng = _rng(29, rest[0])
+    y = _strike(n, sr, spec, 1.0, rng)
+    gap = int(rng.uniform(0.035, 0.07) * sr)
+    y[gap:] += _strike(n - gap, sr, spec, rng.uniform(0.5, 0.7), rng)
+    y = _peak(y, 0.8)
     left, right = (1.0, 0.85) if int(foot) % 2 == 0 else (0.85, 1.0)
     return _stereo(_edges(y, sr, 0.001), left, right)
 

@@ -59,7 +59,7 @@ from .theory import (CHORDS, SCALES, TheoryError, arp, chord, in_scale, invert,
                      note_name, pitch, scale, scale_pcs)
 from .viz import piano_roll, waveform
 
-__version__ = "2.6.0"
+__version__ = "2.7.0"
 
 __all__ = [
     # model

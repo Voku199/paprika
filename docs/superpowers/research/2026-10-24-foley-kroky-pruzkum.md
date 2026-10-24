@@ -9,7 +9,11 @@ speed=, weight=, jitter=)`, nové parametry `human._step`, testy
 `tests/test_gait.py`. Fáze F2 implementována (2026-10-24): řádek `KROKY`
 v reportu a v `check`, `gait.irregularity`, `metrics.step_stats`,
 pravidla metronomu, smyčky, stejně silných kroků a kopií (sekce 6).
-F3–F5 nejsou začaté.
+Fáze F3 implementována (2026-10-24): `paprika/foley.py` — krok z vrstev
+(dopad Hertzovým pulzem, tření, úlomky řízené reakční silou, bláto, sníh,
+výbava), 8 parametrických povrchů, 4 boty, přechody povrchů,
+`steps(shoe=, gear=, cloth=, blend=)`, navazování chůze, ukázka
+`songs/kroky.py` (sekce 7). F4–F5 nejsou začaté.
 
 Zdroje níž jsou citované z paměti, ne ověřené hledáním na webu v té
 session. Před citací v jiném dokumentu je ověř (název, rok, licenci).
@@ -79,8 +83,8 @@ variabilita intervalu kroku má dlouhou paměť (Hausdorff et al. 1995, DFA
 |---|---|---|
 | F1 | plánovač chůze: kadence, 1/f jitter, OU korelace, nohy, váha a rychlost | hotovo |
 | F2 | metriky opakování kroků v reportu (podobnost párů, nepravidelnost intervalů, síla, těžiště, rozdíl nohou) | hotovo |
-| F3 (další) | vrstvy (Hertzův dopad, GRF, úlomky řízené dGRF/dt, odval, oblečení na fázi kroku, výbava), povrchy grass / snow / mud, přechody povrchů | — |
-| F4 | sample -> model z uživatelových nahrávek (modální odhad, přenos obálky) | — |
+| F3 | vrstvy (Hertzův dopad, GRF, úlomky řízené dGRF/dt, odval, oblečení na fázi kroku, výbava), povrchy grass / snow / mud / metal, přechody povrchů | hotovo |
+| F4 (další) | sample -> model z uživatelových nahrávek (modální odhad, přenos obálky) | — |
 | F5 | AI textury přes `human_worker.py` + síto s CLAP | — |
 
 ## 5. F1 — co je implementované
@@ -195,3 +199,92 @@ několik násobků kolem 1, zatímco šum kliku je pokaždé nový. Metrika
 zůstala v `step_stats` (`shape_adj`, `shape_all`), pravidlo na ní není.
 Korelace z F1 je tedy slyšet hlavně v síle a odstupu pata–špička, ne
 v barvě; silnější barevná paměť přijde s vrstvami a povrchy v F3.
+
+## 7. F3 — krok z vrstev
+
+`paprika/foley.py`. Pevné kroky (`human.SURFACES`, 3 parametry) zůstaly
+bit-identické; chůze z F1 dostala nový zvuk — F1 tabulku a `STEP_GAIN`
+nahradily parametrické povrchy (F1 byla jen na této větvi, nevydaná).
+
+**Řídicí průběh.** Reakční síla podložky `grf(t, kontakt, běh)`: chůze
+= dva gaussovské vrcholy (25 % a 75 % kontaktu) + údolí, okno
+`sin(π t / T)^0.5`; běh = `sin^1.5`; obojí s rázem paty (12 ms, šířka
+6 ms, 0.5) a normalizované na 1. Úlomky berou kladnou derivaci
+normalizovanou na 1 a samotnou sílu.
+
+**Dopad.** Půlsinusový pulz s jednotkovou plochou trvá
+`τ = bota_ms · (1 + 8 (1 − tvrdost)) · (v / 1.4)^−0.2`
+(boot 0.5, sneaker 1.2, heels 0.2, bare 2.5 ms; tvrdost kámen a kov 1,
+dřevo 0.85, štěrk 0.6, hlína 0.4, sníh 0.2, tráva 0.15, bláto 0.05).
+Místo konvoluce stačí analytické spektrum pulzu
+`|cos(π f τ) / (1 − (2 f τ)²)|` (limita π/4 na f = 1/2τ): každá
+rezonance (tlumený sinus) dostane tenhle zisk na své frekvenci a začne
+o τ/2 později. Rezonance podložky mají u každého kroku amplitudu
+lognormal(0, 0.35) a frekvenci ±3 % (jiné místo dopadu), dupnutí nohy
+±5 % a výšku podle váhy. Špička dopadne po odstupu z F1 s 1.5× delším
+pulzem.
+
+*Klik hrany.* S celým pulzem neměl boot na kameni žádný klik: zisk na
+3.2 kHz při τ = 0.5 ms je 0.033 (−30 dB), 95 % energie kroku bylo pod
+200 Hz. Klik teď dělá hrana podrážky s kontaktem `CLICK_EDGE` = 0.2 τ
+(boot na kameni 0.1 ms -> zisk 0.92; bosá noha 0.5 ms -> 0.03, tichá).
+Současně kleslo dupnutí tvrdých podlah (kámen 0.9 -> 0.5, dřevo 0.8 ->
+0.6, kov 0.6 -> 0.4). Kámen: těžiště 340 -> 850 Hz, nad 4 kHz 3 -> 9 %.
+
+**Tření.** Smyk paty `grip · (v/1.4)^0.5`, τ 12 ms; odval špičky
+`0.6 · scuff · min(v/1.4, 2)^1.5` kolem konce kontaktu. Původně lineární
+smyk a odval ~v^1.5 bez meze přerostly při běhu dopad 1.6× (kámen, běh
+3.2 m/s: tření 1.62 vs dopad 1.03) a běh narážel na strop.
+
+**Úlomky.** Bernoulliho zrna s četností `rate · dF⁺ + sustain · F`
+(+ 8 % `rate` dosedání po odlepení s τ = tail/3), amplituda
+`lognormal(0, 0.6) · √(0.3 + F)`, dvě pásmová propust (hlavní pásmo
+× jas, tělo). Sníh: vrzání = zrna při zatěžování přes úzkou propust
+1.3 kHz (Q 6). Bláto: mlasknutí (šum 500 Hz, τ 30 ms), sání po odlepení
+(sinus klesající 420–600 -> 130–190 Hz za 35–60 ms), Poisson(3) bublinek
+400–1500 Hz. Výbava: Poisson(srážek) po dopadu se zpožděním 10–40 ms
++ polovina při odrazu, každá srážka dva mody ze sady (klíče 2.9–8.8 kHz,
+řetěz 3.5–6.6 kHz, zbroj 0.65–3.3 kHz), síla ~ úroveň · v^1.2, ve středu.
+Oblečení: hity `cloth` (existující generátor) od 10 % intervalu
+po kroku na 80 % intervalu, velocity · (0.45 + 0.2 v/1.4).
+
+**Kalibrace.** `SURFACE_GAIN` = cíl / medián špičky 40 variant
+referenčního chodce (75 kg, 1.4 m/s, boot, bez výbavy, 44.1 kHz). Cíle
+`SURFACE_TARGET`: kámen a dřevo 0.45, kov 0.5, štěrk 0.45, hlína 0.35,
+tráva 0.3, sníh a bláto 0.4. Výsledek (medián):
+
+| Povrch | Špička | Běh 3.2 | 110 kg běh 3.5 | Těžiště | > 4 kHz | < 200 Hz | −30 dB |
+|---|---|---|---|---|---|---|---|
+| stone | 0.45 | 0.85 | 0.95 | 848 Hz | 9 % | 85 % | 0.57 s |
+| wood | 0.43 | 0.72 | 0.93 | 265 Hz | 0 % | 69 % | 0.56 s |
+| metal | 0.49 | 0.80 | 0.95 | 767 Hz | 1 % | 3 % | 0.76 s |
+| gravel | 0.46 | 0.70 | 0.94 | 1037 Hz | 10 % | 78 % | 0.56 s |
+| dirt | 0.34 | 0.57 | 0.74 | 245 Hz | 1 % | 93 % | 0.56 s |
+| grass | 0.32 | 0.46 | 0.56 | 1562 Hz | 17 % | 79 % | 0.53 s |
+| snow | 0.46 | 0.62 | 0.68 | 2708 Hz | 22 % | 25 % | 0.53 s |
+| mud | 0.40 | 0.67 | 0.86 | 127 Hz | 0 % | 87 % | 0.70 s |
+
+Strop 0.95 zasáhne jen těžký sprinter na tvrdé podlaze (pak se ten krok
+stáhne, hlasitost dál neroste). Boty na dřevě: heels 0.58, boot 0.43,
+sneaker 0.22, bare 0.11. Výbava na hlíně: špička 0.40–0.42 (bez ní 0.34),
+klíče zvednou podíl nad 2.5 kHz ~4×.
+
+**F2 na F3** (8 taktů chůze, mikrofon zapnutý): žádný povrch nemá kopii;
+podobnost max 0.11–0.42, kov 0.94 (pevné rezonance plechu, mění se jen
+jejich amplitudy — skutečný rošt zní taky pokaždé stejně vysoko), rozptyl
+síly 0.9–2.6 dB.
+
+**Co F2 našla.** `songs/kroky.py` měla nepravidelnost 7.6 %: druhé
+`steps()` (běh od taktu 10) začalo na mřížce 0.23 beatu po posledním
+kroku chůze a stejnou nohou — zakopnutí. Teď `steps()` začínající méně
+než 1.5 intervalu po posledním kroku stopy naváže (o interval později,
+druhou nohou) a rychlost převede za `CONTINUE_STEPS` = 3 kroky (skok
+z intervalu 1.05 na 0.72 beatu dával 5 %). Metrika nepravidelnosti
+přitom přešla z klouzavého mediánu na lokální přímku (rozběh 1.4 ->
+3.4 m/s za 2 takty mediánu ujížděl). Výsledek: 2.6 %, nohy se střídají.
+
+**Neověřeno poslechem.** Všechno výš jsou měření spektra a obálky, ne
+poslech. Rozložení energie (kámen 85 % pod 200 Hz, tráva jen 17 % nad
+4 kHz) je odhad z fyziky, ne srovnání se skutečnými nahrávkami kroků —
+to je F4. Až budou reference, porovnat pásma, těžiště a poměr dupnutí
+ku kliku po površích a upravit `Surface`.

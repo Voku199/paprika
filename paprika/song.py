@@ -546,6 +546,9 @@ def _vocalset_singer(track) -> str | None:
     return base if base in VOICES else None
 
 
+CONTINUE_STEPS = 3   # za kolik kroků navazující chůze převede rychlost
+
+
 class HumanTrack(SfxTrack):
     """Lidské zvuky: nádech, výdech, mlasknutí, srdce, šustění oblečení, kroky.
 
@@ -733,14 +736,16 @@ class HumanTrack(SfxTrack):
                           self._variant("cloth", variant)), float(beats))
 
     def steps(self, bars, every: float | None = None, beat: float = 0.0,
-              surface: str = "stone", vel: int = 90, *, pace: str | None = None,
-              speed=None, weight: float | None = None, jitter: float | None = None):
+              surface="stone", vel: int = 90, *, pace: str | None = None,
+              speed=None, weight: float | None = None, jitter: float | None = None,
+              shoe: str | None = None, gear: str | None = None,
+              cloth: str | None = None, blend: float = 1.0):
         """Kroky v rozsahu `bars=(od, do)`, střídavě levá a pravá noha.
-        Povrch: stone, wood, gravel, dirt.
 
-        Bez `pace`/`speed`/`weight`/`jitter` je to pevný krok každých
-        `every` beatů (výchozí 1), jako dřív. S kterýmkoli z nich chodí
-        člověk (`gait.plan`): `pace` slow / walk / brisk / run nastaví
+        Bez dalších parametrů na povrchu stone / wood / gravel / dirt je to
+        pevný krok každých `every` beatů (výchozí 1), jako dřív. Jinak
+        chodí člověk (`gait.plan`) a krok se skládá z vrstev
+        (`foley.footstep`): `pace` slow / walk / brisk / run nastaví
         rychlost (0.9 / 1.4 / 1.9 / 3.2 m/s), `speed` ji dá přímo v m/s
         nebo jako křivku `[(takt, m/s), ...]` (zrychlení). Interval je
         z kadence při té rychlosti, pokud není dané `every`. `weight` je
@@ -748,14 +753,25 @@ class HumanTrack(SfxTrack):
         `jitter` variační koeficient intervalu (výchozí 0.025, 0 = na
         mřížce). Síla a barva kroků jsou korelované a levá noha se stále
         liší od pravé podle `seed` stopy. Nad 2.2 m/s je to běh.
+
+        Povrchy chůze: stone, wood, metal, gravel, dirt, grass, snow, mud;
+        `surface` může být i cesta `[(takt, povrch), ...]` — přechod trvá
+        `blend` beatů (oba povrchy znějí zároveň). `shoe` boot / sneaker /
+        heels / bare (výchozí boot), `gear` keys / chain / armor (kov na
+        trupu cinká po dopadu), `cloth` cotton / nylon / wool přidá šustění
+        oblečení ve fázi švihu nohy (hity `cloth`).
+
+        Začne-li chůze méně než 1.5 intervalu po posledním kroku předchozí
+        chůze na stejné stopě, naváže na ni (další krok o interval později,
+        druhou nohou, rychlost se převede za 3 kroky) — přechod z chůze do
+        běhu nezakopne ani neskočí.
         """
-        if surface not in _human.SURFACES:
-            raise ValueError(f"neznámý povrch {surface!r}; k dispozici: "
-                             f"{', '.join(_human.SURFACES)}")
         lo, hi = (bars if isinstance(bars, (tuple, list)) else (bars, bars + 1))
         if every is not None and float(every) <= 0:
             raise ValueError("steps: every musí být kladné")
-        if pace is None and speed is None and weight is None and jitter is None:
+        fixed = (isinstance(surface, str) and surface in _human.SURFACES
+                 and all(x is None for x in (pace, speed, weight, jitter, shoe, gear, cloth)))
+        if fixed:
             every = 1.0 if every is None else float(every)
             at = self._bar_to_beat(lo) + float(beat)
             foot = 0
@@ -764,7 +780,18 @@ class HumanTrack(SfxTrack):
                 at += every
                 foot = 1 - foot
             return self
+        from . import foley as _foley
         from . import gait as _gait
+        ground = self._surface_path(surface, float(blend))
+        shoe = "boot" if shoe is None else shoe
+        if shoe not in _foley.SHOES:
+            raise ValueError(f"neznámá bota {shoe!r}; k dispozici: {', '.join(_foley.SHOES)}")
+        if gear is not None and gear not in _foley.GEARS:
+            raise ValueError(f"neznámá výbava {gear!r}; k dispozici: "
+                             f"{', '.join(_foley.GEARS)}")
+        if cloth is not None and cloth not in _human.FABRICS:
+            raise ValueError(f"neznámá látka {cloth!r}; k dispozici: "
+                             f"{', '.join(_human.FABRICS)}")
         if pace is not None and pace not in _gait.PACES:
             raise ValueError(f"neznámé tempo chůze {pace!r}; k dispozici: "
                              f"{', '.join(_gait.PACES)}")
@@ -783,14 +810,80 @@ class HumanTrack(SfxTrack):
         walk = getattr(self, "_walks", 0)
         self._walks = walk + 1
         start = self._bar_to_beat(lo) + float(beat)
+        step = (float(every) if every is not None
+                else self.song.bpm / 60.0 / _gait.cadence(curve(start)))
+        first_foot = 0
+        last = getattr(self, "_last_step", None)
+        if last is not None and last[0] < start < last[0] + 1.5 * step:
+            # navazuje na předchozí chůzi: další krok o interval po posledním,
+            # druhou nohou, a rychlost se převede plynule za ~3 kroky
+            last_beat, last_foot, last_speed = last
+            target, ramp_end = curve, start + CONTINUE_STEPS * step
+
+            def curve(b, _t=target, _v=last_speed, _a=last_beat, _e=ramp_end):
+                w = min(1.0, max(0.0, (b - _a) / (_e - _a)))
+                return _v + (_t(b) - _v) * w
+            if every is None:
+                step = self.song.bpm / 60.0 / _gait.cadence(last_speed)
+            start, first_foot = last_beat + step, 1 - last_foot
         plan = _gait.plan(start, self._bar_to_beat(hi), self.song.bpm, curve,
                           weight=kg, every=every, jitter=jit,
                           walker=_gait.Walker(self.seed),
-                          seed=self.seed * 7919 + walk)
+                          seed=self.seed * 7919 + walk, first_foot=first_foot)
+        if plan:
+            self._last_step = (plan[-1].beat, plan[-1].foot, plan[-1].speed)
         base = (self.seed * 7919 + walk) * 100_003
         for k, st in enumerate(plan):
-            self._put("step", st.beat, vel, st.params(surface, base + k))
+            self._put("step", st.beat, vel,
+                      st.params(ground(st.beat), base + k, shoe, gear))
+            if cloth is not None:
+                nxt = plan[k + 1].beat if k + 1 < len(plan) else None
+                prev = plan[k - 1].beat if k else None
+                gap = (nxt - st.beat if nxt is not None
+                       else st.beat - prev if prev is not None else 1.0)
+                cv = int(np.clip(vel * (0.45 + 0.2 * st.speed / _gait.REF_SPEED), 1, 127))
+                beats = round(0.8 * gap, 4)
+                self._put("cloth", st.beat + 0.1 * gap, cv,
+                          (cloth, beats, "swing", base + k), beats)
         return self
+
+    def _surface_path(self, surface, blend: float):
+        """Povrch chůze: jméno nebo body `[(takt, povrch), ...]` -> funkce
+        beatu, která vrátí jméno, nebo `(a, b, w)` během přechodu dlouhého
+        `blend` beatů kolem změny."""
+        from . import foley as _foley
+        if blend < 0:
+            raise ValueError("steps: blend musí být >= 0")
+        if isinstance(surface, str):
+            pts = [(0.0, surface)]
+        else:
+            try:
+                pts = sorted((self._bar_to_beat(b), str(n)) for b, n in surface)
+            except (TypeError, ValueError):
+                raise ValueError(f"steps: surface je povrch nebo [(takt, povrch), ...], "
+                                 f"ne {surface!r}") from None
+            if not pts:
+                raise ValueError("steps: surface bez bodů")
+        for _, name in pts:
+            if name not in _foley.SURFACES:
+                raise ValueError(f"neznámý povrch {name!r}; k dispozici: "
+                                 f"{', '.join(_foley.SURFACES)}")
+
+        def at(beat: float):
+            cur = pts[0][1]
+            for (_, a), (b_beat, b) in zip(pts, pts[1:]):
+                if a == b:
+                    continue
+                lo = b_beat - blend / 2.0
+                if beat < lo:
+                    return a
+                w = 1.0 if blend == 0 else (beat - lo) / blend
+                if w < 1.0:
+                    w = round(w, 2)
+                    return a if w <= 0 else (a, b, w)
+                cur = b
+            return cur if len(pts) > 1 else pts[0][1]
+        return at
 
     def _speed_curve(self, speed):
         """Rychlost chůze: číslo (m/s) nebo body `[(takt, m/s), ...]` ->

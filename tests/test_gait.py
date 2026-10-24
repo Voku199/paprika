@@ -6,7 +6,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from paprika import Song, gait, model_warnings  # noqa: E402
+from paprika import Song, gait, metrics, model_warnings  # noqa: E402
+from paprika.analyze import check_report, step_stats, warnings_for  # noqa: E402
+from paprika.render import render_song  # noqa: E402
 from paprika.human import CEILING  # noqa: E402
 from paprika.sfx import _CACHE, render_sfx  # noqa: E402
 
@@ -189,11 +191,117 @@ class TestStepAudio(unittest.TestCase):
                 render_sfx("step", params, SR, 120)
 
 
+class TestIrregularity(unittest.TestCase):
+    def test_matches_jitter(self):
+        for jit in (0.01, 0.025, 0.05):
+            plan = gait.plan(0.0, 400.0, 120, WALK, jitter=jit, seed=2)
+            self.assertAlmostEqual(gait.irregularity([p.beat for p in plan]), jit,
+                                   delta=0.006 + 0.3 * jit, msg=jit)
+
+    def test_ignores_ramp_and_stops(self):
+        ramp = gait.plan(0.0, 60.0, 120, lambda b: 1.0 + b / 20.0, jitter=0.0,
+                         walker=gait.Walker(0))
+        self.assertGreater(gait.interval_cv([p.beat for p in ramp]), 0.1)
+        self.assertLess(gait.irregularity([p.beat for p in ramp]), 0.02)
+        two = list(range(10)) + [30 + i for i in range(10)]
+        self.assertEqual(len(gait.walks(two)), 2)
+        self.assertEqual(gait.irregularity(two), 0.0)
+
+    def test_too_few(self):
+        self.assertIsNone(gait.irregularity([0, 1, 2, 3]))
+
+
+class TestStepMetrics(unittest.TestCase):
+    @staticmethod
+    def _burst(rng, n=4000):
+        t = np.arange(n) / SR
+        return (0.5 * np.sin(2 * np.pi * 80 * t) + 0.3 * rng.standard_normal(n)) * np.exp(-t / 0.03)
+
+    def _track(self, bursts, gap=0.5):
+        step = int(gap * SR)
+        buf = np.zeros(step * (len(bursts) + 1))
+        for i, b in enumerate(bursts):
+            buf[i * step:i * step + b.size] += b
+        return buf, [i * step for i in range(len(bursts))]
+
+    def test_copies_detected(self):
+        rng = np.random.default_rng(1)
+        one = self._burst(rng)
+        buf, on = self._track([one * g for g in (1.0, 0.7, 1.2, 0.9, 1.0, 0.8)])
+        st = metrics.step_stats(buf, SR, on)
+        self.assertEqual(st["repeats"], 5)
+        self.assertGreater(st["sim_max"], 0.99)
+        self.assertEqual(st["repeat_of"][1], 0)
+
+    def test_same_thud_different_noise_is_not_copy(self):
+        # tlumený sinus je u všech stejný, náhodná část ne -> žádná kopie
+        rng = np.random.default_rng(2)
+        buf, on = self._track([self._burst(rng) for _ in range(8)])
+        st = metrics.step_stats(buf, SR, on)
+        self.assertEqual(st["repeats"], 0)
+        self.assertLess(st["sim_max"], 0.5)
+        self.assertGreater(st["level_sd"], 0.0)
+
+    def test_silence_and_few(self):
+        self.assertIsNone(metrics.step_stats(np.zeros(SR), SR, [0, 100, 200, 300]))
+        rng = np.random.default_rng(3)
+        buf, on = self._track([self._burst(rng), self._burst(rng)])
+        self.assertIsNone(metrics.step_stats(buf, SR, on))
+
+
 class TestReport(unittest.TestCase):
     def test_gait_steps_not_robotic(self):
         s, _, _ = _steps(bars=(0, 4), pace="walk")
         texts = [w.text for w in model_warnings(s)]
         self.assertFalse(any("roboticky" in t for t in texts), texts)
+
+    @staticmethod
+    def _texts(warns, name="telo"):
+        return [w.text for w in warns if w.where == name]
+
+    def test_legacy_steps_flagged_without_render(self):
+        s = Song(bpm=120, bars=8, sample_rate=SR)
+        s.human("telo", mic=False).steps((0, 8), every=1)
+        texts = self._texts(model_warnings(s))
+        self.assertTrue(any("metronom" in t for t in texts), texts)
+        self.assertTrue(any("stejný vzorek jako dřívější" in t and "24 z 32" in t
+                            for t in texts), texts)
+        self.assertIn("KROKY    telo: 32 kroků   nepravidelnost 0.0 %   stejný vzorek 24/32",
+                      check_report(s))
+
+    def test_gait_steps_quiet(self):
+        s, _, _ = _steps(bars=(0, 8), pace="walk")
+        texts = self._texts(model_warnings(s))
+        self.assertFalse(any("metronom" in t or "vzorek" in t for t in texts), texts)
+
+    def test_report_line_and_audio_rules(self):
+        s = Song(bpm=120, bars=6, sample_rate=SR)
+        s.human("stary", mic=False, seed=1).steps((0, 6), every=1)
+        s.human("chuze", mic=False, seed=1).steps((0, 6), pace="walk")
+        r = render_song(s, report=False, print_report=False)
+        st = step_stats(s, r.tracks)
+        self.assertEqual(st["stary"]["repeats"], 16)       # 24 kroků, 8 variant
+        self.assertEqual(st["chuze"]["repeats"], 0)
+        self.assertLess(st["stary"]["level_sd"], 0.5)
+        self.assertGreater(st["chuze"]["level_sd"], 0.8)
+        warns = warnings_for(s, r.audio, r.tracks, r.raw_peak)
+        self.assertTrue(any("stejně silné" in t for t in self._texts(warns, "stary")))
+        self.assertFalse(self._texts(warns, "chuze"), self._texts(warns, "chuze"))
+        r = render_song(s, print_report=False)
+        self.assertIn("KROKY    stary: 24 kroků", r.report)
+        self.assertIn("kopie 0/", r.report)
+
+    def test_bars_slice_aligns_onsets(self):
+        s = Song(bpm=120, bars=8, sample_rate=SR)
+        h = s.human("telo", mic=False, seed=2).steps((0, 8), every=1)
+        r = render_song(s, bars=(4, 8), report=False, print_report=False)
+        st = step_stats(s, r.tracks, (4, 8))["telo"]
+        self.assertEqual(st["n"], 16)
+        self.assertEqual(st["repeats"], 8)
+        # nástupy sedí: okno začíná těsně před úderem, ne v tichu mezi kroky
+        first = [x for x in h.hits if x.start_beat >= 16][0]
+        self.assertIs(st["hits"][0], first)
+        self.assertGreater(min(st["peak_db"]), -40.0)
 
 
 if __name__ == "__main__":

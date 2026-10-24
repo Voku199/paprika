@@ -10,6 +10,7 @@ import os
 import numpy as np
 
 from . import corpus as _corpus
+from . import gait as _gait
 from . import human as _human
 from . import metrics as _metrics
 from . import theory
@@ -17,7 +18,7 @@ from .rules import EPS, Warning_, harmony_lines, theory_warnings
 from .song import DrumTrack, HumanTrack, Song
 
 __all__ = ["report", "warnings_for", "model_warnings", "check_report",
-           "band_energy", "db", "Warning_"]
+           "band_energy", "db", "Warning_", "step_stats"]
 
 BANDS = ((0.0, 250.0), (250.0, 4000.0), (4000.0, 22050.0))
 BREATH_EPS = 0.02        # beaty: o tolik smí nádech zasáhnout do noty
@@ -385,6 +386,152 @@ def _breath_level(song: Song, buffers: dict, warns: list) -> None:
                     return
 
 
+# --- kroky: opakování a metronom --------------------------------------------
+STEP_MIN = 6             # od kolika kroků na stopě se kroky měří
+STEP_GRID = 0.005        # nepravidelnost pod tímhle = metronom (chůze 2–4 %)
+STEP_LEVEL_SD = 0.5      # dB: rozptyl síly pod tímhle = všechny kroky stejně silné
+STEP_HINT = 'steps(pace="walk") chodí jako člověk'
+
+
+def _step_hits(t, lo: float | None = None, hi: float | None = None) -> list:
+    """Kroky stopy (`step`, ne klipy) seřazené podle času, volitelně jen v beatech [lo, hi)."""
+    if not isinstance(t, HumanTrack):
+        return []
+    hits = sorted((h for h in t.hits if h.name == "step"), key=lambda h: h.start_beat)
+    if lo is not None:
+        hits = [h for h in hits if lo - EPS <= h.start_beat < hi]
+    return hits
+
+
+def _param_repeats(hits) -> tuple[int, object]:
+    """Kolik kroků je stejný vzorek (stejné parametry) jako některý dřívější
+    krok — kromě bezprostředně předchozího, to hlásí pravidlo kulometu.
+    Vrátí (počet, první takový hit)."""
+    seen: set = set()
+    count, first, prev = 0, None, None
+    for h in hits:
+        if h.params in seen and h.params != prev:
+            count += 1
+            first = first or h
+        seen.add(h.params)
+        prev = h.params
+    return count, first
+
+
+def _step_model(song: Song, warns: list) -> None:
+    """Kroky bez audia: metronom (nepravidelnost ~0) a opakované vzorky."""
+    shown = 0
+    for t in song.tracks:
+        hits = _step_hits(t)
+        if len(hits) < STEP_MIN:
+            continue
+        irr = _gait.irregularity([h.start_beat for h in hits])
+        if irr is not None and irr < STEP_GRID:
+            bar = _bar_of(song, hits[0].start_beat)
+            warns.append(Warning_(
+                "INFO", t.name,
+                f"bar {bar}   kroky přesně na mřížce (nepravidelnost "
+                f"{100 * irr:.1f} %, chůze 2–4 %) — zní jako metronom; {STEP_HINT}",
+                bar))
+            shown += 1
+        count, first = _param_repeats(hits)
+        if count:
+            bar = _bar_of(song, first.start_beat)
+            warns.append(Warning_(
+                "INFO", t.name,
+                f"bar {bar}   {count} z {len(hits)} kroků je stejný vzorek jako "
+                f"dřívější krok (pevné steps() má {_human.MAX_VARIANTS} variant) — "
+                f"smyčka; {STEP_HINT}", bar))
+            shown += 1
+        if shown >= 4:
+            return
+
+
+def step_stats(song: Song, buffers: dict, bars=None) -> dict:
+    """Metriky kroků každé lidské stopy z hotového bufferu (stereo, po fx,
+    před vol): `metrics.step_stats` + `irregularity` z modelu, `params_repeats`
+    a `feet_db` (medián špičky levé − pravé nohy v dB; `None` bez obou
+    nohou). `bars` =
+    renderovaný výsek, buffer pak začíná na jeho začátku."""
+    bpb, spb, sr = song.beats_per_bar, 60.0 / song.bpm, song.sample_rate
+    lo, hi = (bars if bars else (0, song.bars))
+    lo_b, hi_b = lo * bpb, hi * bpb
+    out: dict = {}
+    for t in song.tracks:
+        hits = _step_hits(t, lo_b, hi_b)
+        buf = buffers.get(t.name) if hits else None
+        if len(hits) < 3 or buf is None:
+            continue
+        onsets = [int(round((h.start_beat - lo_b) * spb * sr)) for h in hits]
+        st = _metrics.step_stats(buf, sr, onsets)
+        if st is None:
+            continue
+        by_onset = dict(zip(onsets, hits))
+        feet: dict = {0: [], 1: []}
+        for start, peak in zip(st["starts"], st["peak_db"]):
+            h = by_onset.get(start)
+            if h is not None and len(h.params) > 1:
+                feet[int(h.params[1]) % 2].append(peak)
+        st["feet_db"] = (float(np.median(feet[0]) - np.median(feet[1]))
+                         if feet[0] and feet[1] else None)
+        st["irregularity"] = _gait.irregularity([h.start_beat for h in hits])
+        st["params_repeats"] = _param_repeats(hits)[0]
+        st["hits"] = [by_onset.get(s) for s in st["starts"]]
+        out[t.name] = st
+    return out
+
+
+def _step_audio(song: Song, stats: dict, warns: list) -> None:
+    """Kroky z audia: stejně silné kroky a kopie, které model nevysvětlí."""
+    for name, st in stats.items():
+        if st["n"] >= 8 and st["level_sd"] < STEP_LEVEL_SD:
+            warns.append(Warning_(
+                "INFO", name,
+                f"kroky jsou všechny stejně silné (rozptyl {st['level_sd']:.1f} dB, "
+                f"chůze z gait 1–2 dB) — {STEP_HINT}, weight= je zesílí"))
+        hits = st["hits"]
+        odd = [i for i, j in enumerate(st["repeat_of"])
+               if j is not None and hits[i] is not None and hits[j] is not None
+               and hits[i].params != hits[j].params]
+        if odd:
+            bar = _bar_of(song, hits[odd[0]].start_beat)
+            warns.append(Warning_(
+                "WARN", name,
+                f"bar {bar}   {len(odd)} kroků zní jako kopie dřívějšího (podobnost "
+                f"≥ {_metrics.STEP_COPY}), i když mají jiné parametry — generátor "
+                f"kroku ignoruje variantu", bar))
+
+
+def _fmt_steps(name: str, st: dict) -> str:
+    irr = st.get("irregularity")
+    parts = [f"{name}: {st['n']} kroků",
+             "nepravidelnost " + ("—" if irr is None else f"{100 * irr:.1f} %"),
+             f"kopie {st['repeats']}/{st['n']}",
+             f"podobnost max {st['sim_max']:.2f}",
+             f"síla ±{st['level_sd']:.1f} dB",
+             f"těžiště {st['centroid']:.0f} Hz"]
+    if st.get("feet_db") is not None:
+        parts.append(f"levá−pravá {st['feet_db']:+.1f} dB")
+    return "   ".join(parts)
+
+
+def _step_check_lines(song: Song, bars=None) -> list[str]:
+    """Řádky KROKY pro `check` (bez audia)."""
+    bpb = song.beats_per_bar
+    lo, hi = (bars if bars else (0, song.bars))
+    lines = []
+    for t in song.tracks:
+        hits = _step_hits(t, lo * bpb, hi * bpb)
+        if len(hits) < 3:
+            continue
+        irr = _gait.irregularity([h.start_beat for h in hits])
+        lines.append(
+            f"KROKY    {t.name}: {len(hits)} kroků   nepravidelnost "
+            + ("—" if irr is None else f"{100 * irr:.1f} %")
+            + f"   stejný vzorek {_param_repeats(hits)[0]}/{len(hits)}")
+    return lines
+
+
 def _gaps(song: Song, warns: list) -> None:
     for t in song.tracks:
         starts = ([h.start_beat for h in t.hits] if isinstance(t, DrumTrack)
@@ -548,10 +695,13 @@ def _mix_balance(song: Song, audio: np.ndarray, warns: list) -> None:
 
 
 def warnings_for(song: Song, audio: np.ndarray, buffers: dict,
-                 raw_peak: float) -> list:
-    """Všechna pravidla pohromadě, WARN před INFO."""
+                 raw_peak: float, bars=None, steps: dict | None = None) -> list:
+    """Všechna pravidla pohromadě, WARN před INFO. `bars` = renderovaný
+    výsek, `steps` = už spočtené `step_stats` (report je počítá jednou)."""
     warns: list = []
     stereo_buffers = dict(buffers or {})
+    if steps is None:
+        steps = step_stats(song, stereo_buffers, bars)
     buffers = {k: _mono(v) for k, v in stereo_buffers.items()}
     _levels(song, audio, raw_peak, warns)
     _mix_balance(song, audio, warns)
@@ -567,6 +717,8 @@ def warnings_for(song: Song, audio: np.ndarray, buffers: dict,
     _sterile_voice(song, warns)
     _corpus_credits(song, warns)
     _breath_level(song, buffers, warns)
+    _step_model(song, warns)
+    _step_audio(song, steps, warns)
     warns.extend(theory_warnings(song))
     warns.sort(key=lambda w: 0 if w.level == "WARN" else 1)
     return warns
@@ -585,6 +737,7 @@ def model_warnings(song: Song) -> list:
     _breathing(song, warns)
     _sterile_voice(song, warns)
     _corpus_credits(song, warns)
+    _step_model(song, warns)
     warns.extend(theory_warnings(song))
     warns.sort(key=lambda w: 0 if w.level == "WARN" else 1)
     return warns
@@ -602,6 +755,9 @@ def check_report(song: Song, bars=None, name: str | None = None) -> str:
     lines.append("")
     lines.extend(harmony_lines(song, bars))
     lines.append("")
+    steps = _step_check_lines(song, bars)
+    if steps:
+        lines.extend(steps + [""])
     warns = model_warnings(song)
     if bars:
         lo, hi = bars
@@ -662,9 +818,12 @@ def report(song: Song, audio: np.ndarray, buffers: dict, raw_peak: float,
             and buf.size else 0.0
         parts.append(f"{t.name} {_fmt_db(level)} dB")
     lines.append("TRACKS   " + " | ".join(parts))
+    steps = step_stats(song, buffers, bars)
+    for i, (tname, st) in enumerate(steps.items()):
+        lines.append(("KROKY    " if i == 0 else "         ") + _fmt_steps(tname, st))
     lines.append("")
 
-    warns = warnings_for(song, audio, buffers, raw_peak)
+    warns = warnings_for(song, audio, buffers, raw_peak, bars=bars, steps=steps)
     if warns:
         lines.extend(w.line() for w in warns)
     else:

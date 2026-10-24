@@ -389,6 +389,10 @@ v d moll je v pořádku i bez `chromatic=True`.
 | hlasitý nádech (INFO) | nádech je méně než 12 dB pod frází po něm (přirozeně 15–30 dB) |
 | sterilní hlas | `Glottal` bez jitteru a shimmeru v patchi bez vibrata i driftu (lidský hlas: jitter 0.2–1 %, shimmer 1–4 %) |
 | klipy z korpusu (INFO) | skladba používá `clip()` — vypíše licence a autory klipů k atribuci |
+| kroky na mřížce (INFO) | 8+ kroků v souvislé chůzi s nepravidelností pod 0.5 % (lidská chůze 2–4 %) — metronom |
+| smyčka kroků (INFO) | krok má stejné parametry jako některý dřívější (pevné `steps()` má 8 variant) |
+| stejně silné kroky (INFO) | 8+ kroků s rozptylem špiček pod 0.5 dB (z audia) |
+| kopie kroku | dva kroky s různými parametry zní jako tentýž vzorek (podobnost ≥ 0.98) — chyba generátoru |
 
 „Nádech přes noty“ platí i pro hlasová gesta (bručení, vzdech, smích,
 námaha) a hlasové klipy z korpusu (smích, kašel, lapání po dechu, ...) —
@@ -534,6 +538,26 @@ telo.steps((12, 16), pace="run", surface="dirt", every=1)     # běh na dobách
 | `speed` | m/s (0.3–8), nebo křivka `[(takt, m/s), ...]`; nejde s `pace` |
 | `weight` | kg, 20–250 (výchozí 75) |
 | `jitter` | 0–0.2 (výchozí 0.025) |
+
+**Kontrola bez poslechu.** Report po renderu má pro každou lidskou stopu
+s kroky řádek `KROKY`, `check` jeho modelovou část:
+
+```
+KROKY    stary: 48 kroků   nepravidelnost 0.0 %   kopie 40/48   podobnost max 1.00   síla ±1.1 dB   těžiště 551 Hz   levá−pravá +2.4 dB
+         chuze: 50 kroků   nepravidelnost 2.6 %   kopie 0/50   podobnost max 0.36   síla ±1.7 dB   těžiště 623 Hz   levá−pravá -0.1 dB
+```
+
+| Metrika | Co znamená |
+|---|---|
+| nepravidelnost | rozptyl intervalu kolem klouzavého mediánu 7 kroků (zrychlení ani zastavení se nepočítají); 0 % = metronom, chůze 2–4 % |
+| kopie | kolik kroků zní jako kopie dřívějšího: podobnost tvaru vlny nad 1 kHz ≥ 0.98 v posunu ±2 ms. Pod 1 kHz je tlumený sinus dupnutí, ten je u všech kroků skoro stejný a kopii by neodlišil |
+| podobnost max | nejpodobnější pár kroků (1.00 = tentýž vzorek; unikátní kroky z chůze ~0.2–0.5) |
+| síla | směrodatná odchylka špiček v dB |
+| těžiště | medián spektrálního těžiště kroku (dupnutí ho táhne dolů: hlína ~80 Hz) |
+| levá−pravá | rozdíl mediánu špiček levé a pravé nohy v dB (stálá asymetrie chodce, ne pan) |
+
+Okno kroku je 200 ms od 5 ms před nástupem (zkrácené před dalším krokem),
+nástupy bere z datového modelu, takže sedí i s `--bars`.
 
 Hit nese sílu v parametrech, ne ve velocity, proto report u chůze nehlásí
 „všechny velocity stejné“. `humanize()` na stopě s chůzí už nepotřebuješ,
@@ -740,7 +764,7 @@ v [`docs/superpowers/specs/`](docs/superpowers/specs/).
 ## Testy
 
 ```bash
-python -m pytest tests/                                     # ~660 testů, bez sítě
+python -m pytest tests/                                     # ~670 testů, bez sítě
 python -m unittest discover tests                           # bez pytestu
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py        # vyrenderuje všechny songy
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # nainstalované nahrávky

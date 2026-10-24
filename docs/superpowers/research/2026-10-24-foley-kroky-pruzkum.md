@@ -6,7 +6,10 @@
 (kadence z rychlosti, 1/f časování od mřížky, korelované parametry kroků,
 stálé rozdíly nohou, fyzika rychlosti a váhy), `HumanTrack.steps(pace=,
 speed=, weight=, jitter=)`, nové parametry `human._step`, testy
-`tests/test_gait.py`. F2–F5 nejsou začaté.
+`tests/test_gait.py`. Fáze F2 implementována (2026-10-24): řádek `KROKY`
+v reportu a v `check`, `gait.irregularity`, `metrics.step_stats`,
+pravidla metronomu, smyčky, stejně silných kroků a kopií (sekce 6).
+F3–F5 nejsou začaté.
 
 Zdroje níž jsou citované z paměti, ne ověřené hledáním na webu v té
 session. Před citací v jiném dokumentu je ověř (název, rok, licenci).
@@ -75,8 +78,8 @@ variabilita intervalu kroku má dlouhou paměť (Hausdorff et al. 1995, DFA
 | Fáze | Obsah | Stav |
 |---|---|---|
 | F1 | plánovač chůze: kadence, 1/f jitter, OU korelace, nohy, váha a rychlost | hotovo |
-| F2 | metriky opakování kroků v reportu (podobnost párů, CV intervalů, periodicita obálky, těžiště podle povrchu) | další |
-| F3 | vrstvy (Hertzův dopad, GRF, úlomky řízené dGRF/dt, odval, oblečení na fázi kroku, výbava), povrchy grass / snow / mud, přechody povrchů | — |
+| F2 | metriky opakování kroků v reportu (podobnost párů, nepravidelnost intervalů, síla, těžiště, rozdíl nohou) | hotovo |
+| F3 (další) | vrstvy (Hertzův dopad, GRF, úlomky řízené dGRF/dt, odval, oblečení na fázi kroku, výbava), povrchy grass / snow / mud, přechody povrchů | — |
 | F4 | sample -> model z uživatelových nahrávek (modální odhad, přenos obálky) | — |
 | F5 | AI textury přes `human_worker.py` + síto s CLAP | — |
 
@@ -138,3 +141,57 @@ hlášky, report nehlásí „všechny velocity stejné“.
 z literatury, ne zkalibrované na nahrávkách. Až budou k dispozici
 reálné kroky (F4 nebo uživatelovy nahrávky), stejně jako u dechů
 porovnat těžiště, poměr pata/špička a CV intervalů a konstanty upravit.
+
+## 6. F2 — kontrola kroků bez poslechu
+
+AI kroky neslyší, takže F1 bez měření nejde ověřit ani ladit. F2 přidává
+do reportu řádek `KROKY` a čtyři pravidla.
+
+**Nepravidelnost** (`gait.irregularity`, bez audia): kroky se rozdělí na
+souvislé chůze (`walks`: zastavení = interval delší než 1.8× medián),
+interval se vydělí klouzavým mediánem 7 kroků a vezme se rozptyl. Pro
+stálé tempo je to variační koeficient (`jitter` 0.01 / 0.025 / 0.05 dá
+0.012 / 0.026 / 0.051), rampa 1 -> 4 m/s bez jitteru dá 0.4 % místo 18 %
+prostého CV. Chůze s `jitter=0` má ~1 % ze stálého časového posunu nohou
+(`Walker`), pevné `steps()` přesně 0.
+
+**Podobnost** (`metrics.step_stats`, z audia): okno 200 ms od 5 ms před
+nástupem každého kroku (nástupy z modelu; u nástupu na začátku bufferu
+doplněné nulami, jinak se kopie posunou o 5 ms a neshodují). Podobnost
+dvou kroků je maximum normované křížové korelace v posunu ±2 ms **jen nad
+1 kHz**. Přes celé pásmo to nešlo: tlumený sinus dupnutí (hlína 70 Hz,
+amplituda 0.6) je u každého kroku skoro stejný a unikátní běh po hlíně
+vycházel na 0.994 — jako kopie. Nad 1 kHz je jen náhodná část (klik,
+zrna):
+
+| 48–64 kroků, mikrofon zapnutý | podobnost max | kopie |
+|---|---|---|
+| pevné `steps()`, všechny 4 povrchy | 1.00 | 40/48 (= 48 − 8 variant) |
+| `pace="walk"`, 4 povrchy | 0.21–0.42 | 0 |
+| `pace="run"`, 4 povrchy | 0.22–0.48 | 0 |
+
+Kopie = podobnost ≥ 0.98 s některým dřívějším krokem.
+
+**Síla** (rozptyl špiček v dB): pevné kroky 0.3–0.4 dB (kámen, dřevo; štěrk
+a hlína ~1.1 dB díky náhodným zrnům), chůze 1.1–1.7 dB.
+
+**Pravidla** (`analyze.py`, všechna jen INFO kromě posledního):
+
+- metronom — 8+ kroků v souvislé chůzi, nepravidelnost < 0.5 % (model);
+- smyčka — krok má stejné parametry jako některý dřívější, kromě
+  bezprostředně předchozího, to hlásí existující WARN „kulometný efekt“
+  (model);
+- stejně silné kroky — 8+ kroků, rozptyl špiček < 0.5 dB (audio);
+- kopie, kterou model nevysvětlí — dva kroky s *různými* parametry zní
+  jako tentýž vzorek (WARN; hlídá generátor, v normálních songách mlčí).
+
+Na `songs/dech.py` (12 pevných kroků s humanize) hlásí jen smyčku 4/12
+a metronom ne: humanize dá nepravidelnost 0.7 %.
+
+**Co se neosvědčilo:** rozdíl barvy (24 mel pásem) mezi sousedy oproti
+všem párům měl ukázat „paměť“ korelovaných kroků. Rozdíl je ale malý
+(chůze 0.96–0.98, pevné kroky 1.0–1.08), protože OU proces mění jen
+několik násobků kolem 1, zatímco šum kliku je pokaždé nový. Metrika
+zůstala v `step_stats` (`shape_adj`, `shape_all`), pravidlo na ní není.
+Korelace z F1 je tedy slyšet hlavně v síle a odstupu pata–špička, ne
+v barvě; silnější barevná paměť přijde s vrstvami a povrchy v F3.

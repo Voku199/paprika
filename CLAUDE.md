@@ -78,7 +78,7 @@ python -m paprika samples human request laugh --backend dia --out req.json  # wo
 python tools/human_worker.py req.json --out incoming/    # run models (own venv w/ torch)
 python -m paprika samples human import incoming/         # sieve -> human/ corpus
 
-python -m pytest tests/                                  # ~660 tests, ~65 s
+python -m pytest tests/                                  # ~670 tests, ~65 s
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py     # renders every song, ~2 min
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # installed samples: level + tuning
 python -m pytest tests/test_render.py::TestLimiter::test_tames_overs
@@ -154,7 +154,18 @@ Layer boundaries are deliberately sharp — keep them:
   (`tests/test_gait.py::test_legacy_step_unchanged`). `analyze._robotic`
   ignores gait steps (their dynamics are in params, not velocity). Research
   and roadmap F1–F5: `docs/superpowers/research/2026-10-24-foley-kroky-pruzkum.md`
-  (F1 done; F2 = step-repetition metrics in the report is next).
+  (F1 and F2 done; F3 = layers and new surfaces is next). F2 is the
+  feedback loop for steps: `gait.irregularity` (interval spread around a
+  7-step running median, so ramps and stops don't count; `walks` splits at
+  stops), `metrics.step_stats` (per-step windows from model onsets:
+  waveform similarity **above 1 kHz only** — the thud sine is nearly
+  identical in every step and would make unique steps look like copies —,
+  copies ≥ `STEP_COPY`, level spread, centroid), `analyze.step_stats`
+  (+ feet difference, bar-slice offset) feeding the `KROKY` report line,
+  `check` line, model rules `_step_model` (metronome, repeated params)
+  and audio rule `_step_audio` (equal levels, copies the params don't
+  explain). The report computes step stats once and passes them to
+  `warnings_for(..., bars=, steps=)`.
 - `corpus.py` — clip corpus for human sounds the physics can't fake (laugh,
   cough, throat, gasp, sniff, scream, cloth, steps ...) under
   `<samples>/human/`. Clips come from `tools/human_worker.py` (a separate

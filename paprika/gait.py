@@ -34,7 +34,7 @@ import numpy as np
 
 __all__ = ["PACES", "RUN_SPEED", "REF_KG", "REF_SPEED", "JITTER", "CORR",
            "Physics", "Walker", "StepSpec", "cadence", "physics", "plan",
-           "pink", "interval_cv"]
+           "pink", "interval_cv", "walks", "irregularity", "BREAK"]
 
 PACES = {"slow": 0.9, "walk": 1.4, "brisk": 1.9, "run": 3.2}   # m/s
 RUN_SPEED = 2.2       # m/s: přechod chůze -> běh
@@ -45,6 +45,8 @@ MIN_SPEED, MAX_SPEED = 0.3, 8.0
 JITTER = 0.025        # variační koeficient intervalu (zdravá chůze 2–4 %)
 PINK_BETA = 0.8       # spektrum odchylek ~ 1/f^β
 MAX_SHIFT = 0.3       # krok se neposune o víc než 30 % intervalu
+BREAK = 1.8           # interval delší než 1.8× medián = chodec zastavil (nová chůze)
+LOCAL = 7             # kroků: okno klouzavého mediánu pro nepravidelnost
 
 CORR = 0.6            # AR(1) korelace parametrů sousedních kroků
 # směrodatné odchylky OU procesů (log poměr): síla, odstup, poměr špičky, jas, výška
@@ -221,3 +223,30 @@ def interval_cv(beats) -> float:
     if d.size < 2 or float(d.mean()) <= 0:
         return 0.0
     return float(d.std() / d.mean())
+
+
+def walks(beats, min_steps: int = 3) -> list[np.ndarray]:
+    """Začátky kroků rozdělené na souvislé chůze: zastavení je interval delší
+    než `BREAK`× medián. Chůze kratší než `min_steps` se vynechají."""
+    b = np.sort(np.asarray(beats, dtype=np.float64))
+    if b.size < 2:
+        return [b] if b.size >= min_steps else []
+    d = np.diff(b)
+    cut = np.where(d > BREAK * float(np.median(d)))[0] + 1
+    return [w for w in np.split(b, cut) if w.size >= min_steps]
+
+
+def irregularity(beats) -> float | None:
+    """Nepravidelnost kroků: rozptyl intervalu kolem klouzavého mediánu
+    (`LOCAL` kroků), takže zrychlení ani zastavení se nepočítají. Pro
+    stálé tempo je to variační koeficient intervalu; 0 = metronom.
+    `None`, když není aspoň 8 kroků v souvislé chůzi."""
+    dev = []
+    for w in walks(beats, 8):
+        d = np.diff(w)
+        half = LOCAL // 2
+        for i in range(d.size):
+            local = float(np.median(d[max(0, i - half):i + half + 1]))
+            if local > 0:
+                dev.append(d[i] / local - 1.0)
+    return float(np.std(dev)) if len(dev) >= 6 else None

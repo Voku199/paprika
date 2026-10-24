@@ -39,7 +39,15 @@ breaths in 1485 files, 3 singer models). Detection in `DETECT_BAND`
 (300 Hz–16 kHz) plus room-noise subtraction gives 208 breaths and 11
 singer models (LSD 0.9–2.0 dB); the rest of the singers' breaths are
 genuinely near-silent in the recordings. `install.VOCALSET_SIZE` was wrong
-until then (every install failed the size check).
+until then (every install failed the size check). Game footsteps
+(`docs/superpowers/research/2026-10-24-foley-kroky-pruzkum.md`): F1 gait
+(`gait.py`), F2 step metrics in the report, F3 layered steps on 8 surfaces
+(`foley.py`) and F4 surfaces fitted from recordings (`stepfit.py`) are
+done. F4 is verified on synthetic recordings of a hidden surface; the only
+real walking recording reachable from the cloud (zenodo 19678386, CC BY
+4.0) is a low-passed gait sonification (94 % energy < 250 Hz) — good for
+testing segmentation, useless for calibrating surfaces. Nobody has
+listened to any of it yet.
 
 The library is *not* a music generator — melody, harmony and structure are
 written by the author (usually the AI). Paprika supplies theory, synthesis, FX,
@@ -78,8 +86,10 @@ python -m paprika samples breaths --examples output/dechy  # breath models: stat
 python -m paprika samples human request laugh --backend dia --out req.json  # worker job
 python tools/human_worker.py req.json --out incoming/    # run models (own venv w/ torch)
 python -m paprika samples human import incoming/         # sieve -> human/ corpus
+python -m paprika samples steps fit walk.wav --name tiles --base stone  # surface from a recording
+python -m paprika samples steps compare walk.wav --surface gravel       # recording vs surface
 
-python -m pytest tests/                                  # ~690 tests, ~75 s
+python -m pytest tests/                                  # ~705 tests, ~90 s
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py     # renders every song, ~2 min
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # installed samples: level + tuning
 python -m pytest tests/test_render.py::TestLimiter::test_tames_overs
@@ -179,7 +189,29 @@ Layer boundaries are deliberately sharp — keep them:
   ignores gait steps (their dynamics are in params, not velocity).
   Research and roadmap F1–F5:
   `docs/superpowers/research/2026-10-24-foley-kroky-pruzkum.md` (F1–F3
-  done; F4 = sample -> model from real recordings is next).
+  done; F4 = sample -> model from recordings is done too (`stepfit.py`);
+  F5 = AI textures through `tools/human_worker.py` + CLAP sieve is next).
+- `stepfit.py` — recording of footsteps -> fitted surface (F4), audio in,
+  JSON out (`<samples>/steps/surfaces.json`, read by `foley.lookup` /
+  `surface_gain` / `surface_names`, reloaded on mtime change; built-in
+  names can't be overwritten; unknown name -> `foley.MissingSurface` with
+  the fit command). `segment` (envelope > 150 Hz, peaks `ONSET_DB` over
+  the 20th percentile, a peak `MERGE_DB` weaker within `MAX_LEN` is the
+  same step's toe-off; window runs to the last loud frame), `noise_floor`
+  (quiet frames only, outside steps), `modes` (matrix pencil on 90 ms of
+  decay, decimated 2×), `_clusters` (modes in ≥ 40 % of steps, ±4 %),
+  mode amps divided by `pulse_gain` of the model's contact (de-embedding),
+  then analysis-by-synthesis: `FIT_ITER` rounds scaling body / modes /
+  (click+friction+debris) by band groups, then `EQ_ITER` rounds of
+  `Surface.eq` (24 mel bands, ±`EQ_MAX`, only where real or synth is within
+  `LOUD_DB` of its max). Pitfalls found on the way: a Hann window over a
+  whole step hides the heel click and toe-off (use `_flat_window`);
+  mean-removed shapes make EQ iterations fight each other (use band power
+  / total); 3-tap smoothing flips narrow modal corrections; noise
+  estimated from "outside the window" swallowed the toe-off. Tests fit a
+  hidden `TRUTH` surface from 3 different bases to ≤ 1.5 dB band error
+  (the truth itself scores ~1.7 dB against its own recording).
+  `Surface.eq is None` keeps every built-in surface bit-identical.
 - Step feedback (F2): `metrics.step_stats` (per-step windows from model
   onsets, zero-padded before buffer start; waveform similarity **above
   1 kHz only** — the thud sine is nearly identical in every step and made

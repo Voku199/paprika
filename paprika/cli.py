@@ -159,6 +159,25 @@ def build_parser() -> argparse.ArgumentParser:
     hi.add_argument("--license", help="licence pro WAV bez JSON, např. CC0 nebo vlastní")
     hi.add_argument("--author", help="autor / zdroj pro atribuci")
 
+    st = smsub.add_parser(
+        "steps", help="povrchy kroků z vlastních nahrávek chůze: fit, srovnání, řez")
+    stsub = st.add_subparsers(dest="steps_cmd")
+    sf = stsub.add_parser("fit", help="odhadne povrch z nahrávek a uloží ho pod jménem")
+    sf.add_argument("files", nargs="+", help="WAV/MP3 s chůzí (aspoň 4 kroky)")
+    sf.add_argument("--name", required=True, help="jméno nového povrchu (pro steps(surface=))")
+    sf.add_argument("--base", default="stone",
+                    help="vestavěný povrch, ze kterého fit vyjde (výchozí stone)")
+    sf.add_argument("--shoe", default="boot", help="bota v nahrávce (výchozí boot)")
+    sf.add_argument("--license", help="licence nahrávek, např. CC0 nebo vlastní")
+    sf.add_argument("--author", help="autor / zdroj nahrávek")
+    sc = stsub.add_parser("compare", help="porovná nahrávky s povrchem (nic neukládá)")
+    sc.add_argument("files", nargs="+", help="WAV/MP3 s chůzí")
+    sc.add_argument("--surface", required=True, help="vestavěný nebo nafitovaný povrch")
+    sc.add_argument("--shoe", default="boot", help="bota (výchozí boot)")
+    sx = stsub.add_parser("cut", help="rozřeže nahrávku chůze na kroky (WAV)")
+    sx.add_argument("file", help="WAV/MP3 s chůzí")
+    sx.add_argument("--out", required=True, help="cílová složka")
+
     pr = sub.add_parser("presets", help="vypíše presety, bicí sady a SFX")
     pr.add_argument("--tag", help="jen presety s tagem (orchestral, choir, ...)")
     return p
@@ -279,6 +298,32 @@ def main(argv=None) -> int:
                         print(f"  ... a {len(rej) - 20} dalších")
                 else:
                     print("\n".join(corpus.status_lines()))
+            elif getattr(args, "samples_cmd", None) == "steps":
+                from . import stepfit
+                cmd = getattr(args, "steps_cmd", None)
+                try:
+                    if cmd == "fit":
+                        stepfit.check_name(args.name)
+                        segs, sr, noises = stepfit.from_files(args.files)
+                        print(f"{len(segs)} kroků z {len(args.files)} nahrávek, fit od "
+                              f"{args.base} ...")
+                        rec = stepfit.fit(segs, sr, base=args.base, shoe=args.shoe,
+                                          noise=noises)
+                        path = stepfit.save(args.name, rec, args.files, args.license,
+                                            args.author)
+                        print("\n".join(stepfit.fit_lines(args.name, rec)))
+                        print(f"-> {path}\n   použití: steps(..., surface=\"{args.name}\")")
+                    elif cmd == "compare":
+                        segs, sr, noises = stepfit.from_files(args.files)
+                        print("\n".join(stepfit.compare_lines(segs, sr, args.surface,
+                                                              args.shoe, noises)))
+                    elif cmd == "cut":
+                        paths = stepfit.write_cut(args.file, args.out)
+                        print(f"-> {len(paths)} kroků v {args.out}")
+                    else:
+                        print("\n".join(stepfit.status_lines()))
+                except (stepfit.FitError, ValueError, OSError) as e:
+                    raise CliError(str(e))
             else:
                 from .library import status_lines
                 print("\n".join(status_lines()))

@@ -79,8 +79,9 @@ vyrenderované přesně z nich, bez jakékoliv úpravy v jiném programu.
   hlídá, že nádech nejde přes noty a fráze se vejde do jednoho nádechu.
 - **Kroky jako ve hře.** Chůze a běh s lidským časováním, korelovanou
   silou a asymetrií nohou; krok z vrstev (dopad, tření, úlomky, bláto,
-  výbava, oblečení) na osmi površích s plynulými přechody. Report měří,
-  jestli kroky nezní jako smyčka nebo metronom.
+  výbava, oblečení) na osmi površích s plynulými přechody, nebo na povrchu
+  odhadnutém z tvé nahrávky. Report měří, jestli kroky nezní jako smyčka
+  nebo metronom.
 - **MIDI export** do jakékoliv DAW, když budeš chtít skladbu dodělat jinde.
 - **Syntéza, když je potřeba.** 37 ručně napsaných presetů (pady, basy,
   sbor přes formanty, 808…), bicí sady a cinematic efekty (riser, impact,
@@ -623,6 +624,59 @@ Hit nese sílu v parametrech, ne ve velocity, proto report u chůze nehlásí
 posunul by kroky ještě navíc. Bez nových parametrů na povrchu stone / wood /
 gravel / dirt zní `steps()` bit po bitu jako dřív.
 
+### Povrch z vlastních nahrávek
+
+Vestavěné povrchy jsou fyzika s odhadnutými čísly. Máš-li nahrávku chůze
+(pár desítek vteřin, aspoň 4 kroky, WAV nebo MP3), paprika z ní odhadne
+povrch, který zní jako ona (`paprika/stepfit.py`):
+
+```bash
+python -m paprika samples steps fit chuze_dlazba.wav --name dlazba --base stone --license CC0
+python -m paprika samples steps                      # vestavěné + nafitované povrchy
+python -m paprika samples steps compare chuze.wav --surface gravel   # nahrávka vs povrch
+python -m paprika samples steps cut chuze.wav --out kroky/           # kroky jako WAV
+```
+
+```python
+telo.steps((0, 8), pace="walk", surface="dlazba")     # jako vestavěný povrch
+```
+
+Jak to funguje:
+
+1. **Segmentace.** Obálka nad 150 Hz, vrcholy aspoň 12 dB nad šumem
+   nahrávky a 0.25 s od sebe; o 10 dB slabší vrchol krátce po kroku je
+   jeho odval špičky, ne další krok. Šum nahrávky se změří v tichých
+   úsecích mezi kroky a odečte od spektra kroků.
+2. **Rezonance.** Matrix pencil na doznění každého kroku najde tlumené
+   sinusy (frekvence, doznění, amplituda). Rezonance, které se opakují
+   aspoň ve 40 % kroků, jsou rezonance podložky; nejnižší pod 160 Hz je
+   dupnutí. Amplituda se vydělí spektrem kontaktního pulzu boty — povrch
+   chce rezonanci samotnou.
+3. **Analýza syntézou.** Povrch `--base` dostane naměřené rezonance,
+   dupnutí, klik a pásmo úlomků; pak se opakovaně vyrenderují referenční
+   kroky a zisky vrstev se posunou podle podílu energie v pásmech.
+4. **Přenos obálky.** Zbylý rozdíl spektra ve 24 pásmech se uloží jako EQ
+   povrchu (±12 dB) — přenese se i barva mikrofonu a místnosti.
+
+Výstup ukáže pásma nahrávky, základu a fitu a o kolik se fit přiblížil:
+
+```
+POVRCH   dlazba  (základ wood, bota boot, 16 kroků)
+                 sub    bass  lowmid     mid   himid    pres     air
+  real          4.2%   33.5%   47.4%   13.6%    0.7%    0.6%    0.2%
+  base          2.4%   71.2%   24.0%    1.2%    0.4%    0.2%    0.1%
+  fit           2.9%   31.9%   47.2%   15.0%    0.8%    0.6%    0.2%
+  chyba pásem   základ 5.0 dB -> fit 0.7 dB   tvar spektra 9.6 -> 1.0 dB
+  rezonance     305 Hz/41 ms, 787 Hz/26 ms, 1157 Hz/18 ms
+```
+
+Povrchy se ukládají do `<vzorky>/steps/surfaces.json` (mimo repo,
+`PAPRIKA_SAMPLES`) i s licencí a zdroji. Hlasitost se kalibruje na cíl
+povrchu `--base` — absolutní úroveň nahrávky závisí na mikrofonu. Neznámý
+povrch v `steps()` je chyba s návodem, ne tichá náhrada. Rozřezané kroky
+z `cut` jdou importovat do korpusu: `samples human import kroky/ --kind
+steps --license CC0`.
+
 ### Dech z nahrávek (VocalSet)
 
 S nainstalovaným VocalSetem (`samples install voices`) bere nádech barvu
@@ -803,6 +857,7 @@ paprika/
   human.py        dech, výdech, mlasknutí, tep, šustění, kroky, hlasová gesta (fyzika)
   gait.py         chůze a běh: kadence, 1/f časování, korelované kroky, nohy (bez audia)
   foley.py        krok z vrstev: dopad, tření, úlomky, bláto, výbava; 8 povrchů, boty
+  stepfit.py      nahrávka chůze -> kroky -> rezonance (matrix pencil) -> povrch + EQ
   corpus.py       korpus klipů lidských zvuků: síto, import, manifest, licence
   oscillators.py  filters.py  modulation.py  patch.py  presets.py
   fx.py  fx_space.py  fx_dyn.py  fx_lofi.py  fx_mic.py  mastering.py  automation.py
@@ -824,7 +879,7 @@ v [`docs/superpowers/specs/`](docs/superpowers/specs/).
 ## Testy
 
 ```bash
-python -m pytest tests/                                     # ~690 testů, bez sítě
+python -m pytest tests/                                     # ~705 testů, bez sítě
 python -m unittest discover tests                           # bez pytestu
 PAPRIKA_SLOW=1 python -m pytest tests/test_compat.py        # vyrenderuje všechny songy
 PAPRIKA_SLOW=1 python -m pytest tests/test_samples_real.py  # nainstalované nahrávky

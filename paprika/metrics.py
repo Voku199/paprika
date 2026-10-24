@@ -15,7 +15,8 @@ import numpy as np
 
 __all__ = ["BANDS7", "TARGETS", "band_shares", "stereo_width", "correlation",
            "crest_db", "loudness_range", "centroid", "summary", "load_audio",
-           "format_table", "STEP_WINDOW", "STEP_BANDS", "events", "step_stats"]
+           "format_table", "STEP_WINDOW", "STEP_BANDS", "events", "step_stats",
+           "mel_shape", "mel_centers"]
 
 BANDS7 = (("sub", 0.0, 60.0), ("bass", 60.0, 250.0), ("lowmid", 250.0, 500.0),
           ("mid", 500.0, 2000.0), ("himid", 2000.0, 4000.0),
@@ -137,6 +138,30 @@ def _mel_edges(sr: int, n: int, lo: float = 100.0) -> np.ndarray:
     return 700.0 * (10.0 ** (mel / 2595.0) - 1.0)
 
 
+def _shape(mono: np.ndarray, sr: int, edges: np.ndarray | None = None):
+    """Tvar spektra (dB na Hz v mel pásmech, průměr odečtený) a těžiště."""
+    edges = _mel_edges(sr, STEP_BANDS) if edges is None else edges
+    fft_n = 1 << int(np.ceil(np.log2(max(256, mono.size))))
+    p = np.abs(np.fft.rfft(mono * np.hanning(mono.size), fft_n)) ** 2
+    f = np.fft.rfftfreq(fft_n, 1.0 / sr)
+    bands = np.array([p[(f >= a0) & (f < b0)].sum() + 1e-20
+                      for a0, b0 in zip(edges[:-1], edges[1:])])
+    shape = 10.0 * np.log10(bands / (edges[1:] - edges[:-1]))
+    return shape - shape.mean(), float((p * f).sum() / max(1e-20, float(p.sum())))
+
+
+def mel_shape(x: np.ndarray, sr: int) -> np.ndarray:
+    """Tvar spektra zvuku v `STEP_BANDS` mel pásmech (100 Hz–16 kHz), dB
+    s odečteným průměrem — barva bez hlasitosti."""
+    return _shape(_mono(x), sr)[0]
+
+
+def mel_centers(sr: int) -> np.ndarray:
+    """Středy (geometrické) pásem `mel_shape` v Hz."""
+    e = _mel_edges(sr, STEP_BANDS)
+    return np.sqrt(e[:-1] * e[1:])
+
+
 def events(audio: np.ndarray, sr: int, onsets) -> list[dict]:
     """Popis každé události (kroku) od nástupu `onsets` (vzorky).
 
@@ -170,20 +195,15 @@ def events(audio: np.ndarray, sr: int, onsets) -> list[dict]:
         rms = float(np.sqrt(np.mean(mono ** 2)))
         if rms < STEP_SILENT:
             continue
-        fft_n = 1 << int(np.ceil(np.log2(max(256, seg.shape[0]))))
-        p = np.abs(np.fft.rfft(mono * np.hanning(mono.size), fft_n)) ** 2
-        f = np.fft.rfftfreq(fft_n, 1.0 / sr)
-        bands = np.array([p[(f >= a0) & (f < b0)].sum() + 1e-20
-                          for a0, b0 in zip(edges[:-1], edges[1:])])
-        shape = 10.0 * np.log10(bands / (edges[1:] - edges[:-1]))
+        shape, cent = _shape(mono, sr, edges)
         lr = (np.sqrt(np.mean(seg[:, 0] ** 2)) + 1e-12) / (np.sqrt(np.mean(seg[:, 1] ** 2)) + 1e-12)
         out.append({
             "start": o,
             "peak_db": 20.0 * np.log10(float(np.abs(mono).max()) + 1e-12),
             "rms_db": 20.0 * np.log10(rms + 1e-12),
-            "centroid": float((p * f).sum() / max(1e-20, float(p.sum()))),
+            "centroid": cent,
             "lr_db": 20.0 * float(np.log10(lr)),
-            "shape": shape - shape.mean(),
+            "shape": shape,
             "wave": mono,
         })
     return out

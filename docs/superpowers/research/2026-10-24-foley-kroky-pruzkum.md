@@ -13,7 +13,11 @@ Fáze F3 implementována (2026-10-24): `paprika/foley.py` — krok z vrstev
 (dopad Hertzovým pulzem, tření, úlomky řízené reakční silou, bláto, sníh,
 výbava), 8 parametrických povrchů, 4 boty, přechody povrchů,
 `steps(shoe=, gear=, cloth=, blend=)`, navazování chůze, ukázka
-`songs/kroky.py` (sekce 7). F4–F5 nejsou začaté.
+`songs/kroky.py` (sekce 7). Fáze F4 implementována (2026-10-24):
+`paprika/stepfit.py` — segmentace nahrávek chůze, rezonance matrix
+pencil, fit povrchu analýzou syntézou, přenos obálky (`Surface.eq`),
+`samples steps fit / compare / cut`, vlastní povrchy v
+`<vzorky>/steps/surfaces.json` (sekce 8). F5 není začatá.
 
 Zdroje níž jsou citované z paměti, ne ověřené hledáním na webu v té
 session. Před citací v jiném dokumentu je ověř (název, rok, licenci).
@@ -84,8 +88,8 @@ variabilita intervalu kroku má dlouhou paměť (Hausdorff et al. 1995, DFA
 | F1 | plánovač chůze: kadence, 1/f jitter, OU korelace, nohy, váha a rychlost | hotovo |
 | F2 | metriky opakování kroků v reportu (podobnost párů, nepravidelnost intervalů, síla, těžiště, rozdíl nohou) | hotovo |
 | F3 | vrstvy (Hertzův dopad, GRF, úlomky řízené dGRF/dt, odval, oblečení na fázi kroku, výbava), povrchy grass / snow / mud / metal, přechody povrchů | hotovo |
-| F4 (další) | sample -> model z uživatelových nahrávek (modální odhad, přenos obálky) | — |
-| F5 | AI textury přes `human_worker.py` + síto s CLAP | — |
+| F4 | sample -> model z uživatelových nahrávek (modální odhad, přenos obálky) | hotovo |
+| F5 (další) | AI textury přes `human_worker.py` + síto s CLAP | — |
 
 ## 5. F1 — co je implementované
 
@@ -288,3 +292,81 @@ poslech. Rozložení energie (kámen 85 % pod 200 Hz, tráva jen 17 % nad
 4 kHz) je odhad z fyziky, ne srovnání se skutečnými nahrávkami kroků —
 to je F4. Až budou reference, porovnat pásma, těžiště a poměr dupnutí
 ku kliku po površích a upravit `Surface`.
+
+## 8. F4 — povrch z nahrávky
+
+`paprika/stepfit.py`, CLI `python -m paprika samples steps fit|compare|cut`.
+
+**Postup.** (1) `segment`: obálka nad 150 Hz v 5ms oknech, vrcholy
+`ONSET_DB` = 12 dB nad 20. percentilem a 0.25 s od sebe; vrchol o
+`MERGE_DB` = 10 dB slabší do 0.8 s po kroku je odval špičky téhož kroku;
+nástup = první vzorek nad 10 % vrcholu, okno do posledního místa 6 dB nad
+šumem (+30 ms), nejdýl do dalšího kroku. (2) `noise_floor`: energie šumu
+na Σw² okna z tichých 5ms rámců mimo kroky, odečte se od kroků (zbytek
+≥ 1 %). (3) `modes`: matrix pencil (Hua & Sarkar) na 90 ms doznění po
+vrcholu, decimace 2×, řád z singulárních čísel do −45 dB, amplitudy
+nejmenšími čtverci. (4) Rezonance ve ≥ 40 % kroků (±4 %, nejvýš 32 kroků)
+jsou podložka, slabší než −20 dB pod nejsilnější zahodit (zbytky kliku);
+nejnižší pod 160 Hz s τ ≥ 8 ms je dupnutí. Naměřená amplituda se vydělí
+ziskem kontaktního pulzu modelu (`pulse_gain` při `contact_ms` boty
+a základu) — jinak by pulz rezonance ztlumil dvakrát. (5) Klik = vrchol
+spektra 1.5–8 kHz v prvních 10 ms, hlavní pásmo úlomků = těžiště nad 1 kHz
+ve 20–250 ms. (6) Analýza syntézou: 4 kola, 12 referenčních kroků; dupnutí
+<- sub+bass, rezonance <- 250 Hz–2 kHz, klik + tření + úlomky <- nad 2 kHz,
+krok `√(real/synth)` v mezích 0.5–2. (7) Přenos obálky: 5 kol
+`eq += 0.7 · (real − synth)` v podílech výkonu 24 mel pásem (dB vůči
+celku), jen v pásmech do 30 dB pod maximem nahrávky nebo syntézy, mez
+±12 dB. (8) Zisk = cíl povrchu `--base` / medián špičky 30 referenčních
+kroků.
+
+**Ověření na syntetické pravdě** (`tests/test_stepfit.py`): povrch
+`TRUTH` s rezonancemi 310 / 780 / 1150 Hz a dupnutím 95 Hz, 12–16 kroků
+s hlasitostí 0.7–1.2, mezery 0.15–0.4 s, bílý šum −65 dBFS:
+
+| Základ | Chyba pásem základ -> fit | Tvar spektra | Těžiště real / fit |
+|---|---|---|---|
+| stone | 11.2 -> 1.2 dB | 13.4 -> 1.4 dB | 451 / 500 Hz |
+| wood | 5.0 -> 0.7 dB | 9.6 -> 1.0 dB | 451 / 499 Hz |
+| dirt | 9.6 -> 0.3 dB | 12.5 -> 0.4 dB | 451 / 488 Hz |
+
+Rezonance 305 / 787 / 1157 Hz (do 2 %), doznění 41 / 26 / 18 ms (do 5 %),
+dupnutí 94 Hz / 31 ms, doznění kroku 0.56 s = 0.56 s. Spodní mez: sám
+`TRUTH` proti své nahrávce dá 1.7 dB v pásmech (náhodná hlasitost kroků),
+fit je tedy na úrovni šumu metriky. Barva nahrávky ±6 dB nad 3 kHz:
+chyba po fitu 0.7 / 0.87 dB — část sklonu ale převezmou zisky vrstev,
+ne EQ. Fit trvá ~5 s na 16 kroků (44.1 kHz).
+
+**Chyby, které se cestou ukázaly** (každá dávala nesmyslný fit):
+
+- *Hannovo okno přes celý krok* potlačilo klik paty na začátku a odval
+  špičky na konci — tam jsou výšky. Syntéza a nahrávka téhož povrchu se
+  lišily o 12 % energie nad 2 kHz. Teď ploché okno s 2ms náběhy.
+- *Tvar spektra s odečteným průměrem*: každá změna EQ posunula všechna
+  pásma a kola EQ proti sobě bojovala. Teď podíl výkonu vůči celku.
+- *Vyhlazení EQ přes 3 pásma* obrátilo korekci úzkých rezonancí
+  (543 Hz chtělo −8 dB, sousedé +7 a +10 -> +12).
+- *Šum z „mimo okno kroku“* obsahoval odval špičky (okno končilo prvním
+  tichem po patě) a odečet pak smazal výšky — spodní mez vyšla 13 dB. Teď
+  okno drží celý kontakt a šum se bere jen z tichých rámců.
+- *Segmentace* bez slučování našla 32 kroků místo 16 (odval špičky jako
+  krok).
+- *Rezonance 1930 Hz* v pravdě skoro nebyla: kontakt 0.9 ms ji pulzem
+  ztlumil na 6 % — co nahrávka nemá, fit nenajde (test proto na 1150 Hz).
+
+**Skutečná data.** Z cloudu byl dosažitelný jen zenodo.org. Jediná
+nahrávka chůze s vhodnou licencí: zenodo 19678386 (CC BY 4.0, „Taking a
+Walk on the Wild Side“, `SM soundtracks.zip`, soubor
+`NoBackgroundNoise/60-65-ctrl_RF_100_eqSon.mp3`, 256 s). Je to sonifikace
+chůze ze psychologické studie, ne foley: 52 % energie pod 60 Hz, 94 % pod
+250 Hz, nad 2 kHz nic, povrch neuvedený. Na kalibraci povrchů se nehodí.
+Segmentace na prvních 60 s: 104 kroků, interval medián 0.585 s (≈ 100
+kroků/min, jeden vrchol rozdělení 0.4–0.8 s, 5 intervalů pod 0.4 s —
+pravděpodobně rozdělené kroky). Fit od `dirt`: tvar spektra 18.2 -> 0.4 dB,
+pásma 8.7 -> 4.8 dB (zbytek je rumble pod 60 Hz, které model kroku nemá),
+rezonance 181–445 Hz. Nahrávka není v repu ani v testech.
+
+**Co chybí:** skutečné foley nahrávky povrchů (štěrk, sníh, dřevo ...)
+s licencí, na kterých by šlo zkalibrovat vestavěné `SURFACES` a ověřit,
+že fit z nich dá věrohodné rezonance. Tvrdost podložky fit nemění (bere ji
+ze základu) — odhad z rychlosti poklesu spektra nad klikem by byl další
+krok. Nikdo to neslyšel.

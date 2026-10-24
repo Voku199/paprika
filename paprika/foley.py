@@ -32,7 +32,9 @@ z `gait.plan`; tady se z nich jen dělá zvuk.
 
 from __future__ import annotations
 
+import json
 import math
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -40,7 +42,9 @@ import numpy as np
 from . import dsp, gait
 
 __all__ = ["Surface", "SURFACES", "SHOES", "GEARS", "SURFACE_GAIN",
-           "footstep", "grf", "pulse_gain", "contact_ms", "blend_name"]
+           "footstep", "grf", "pulse_gain", "contact_ms", "blend_name",
+           "lookup", "surface_gain", "surface_names", "custom_path",
+           "apply_eq", "MissingSurface"]
 
 TWO_PI = 2.0 * math.pi
 CEILING = 0.95
@@ -60,6 +64,7 @@ class Surface:
     # pásmo, (Hz, Q) tělo, amp, tail s)
     wet: float = 0.0           # 0..1 bláto: mlasknutí, sání, bublinky
     squeak: float = 0.0        # vrzání sněhu
+    eq: tuple | None = None    # dB v pásmech metrics.mel_centers (přenos obálky z nahrávek)
 
 
 SURFACES = {
@@ -119,6 +124,78 @@ SURFACE_TARGET = {"stone": 0.45, "wood": 0.45, "metal": 0.5, "gravel": 0.45,
                   "dirt": 0.35, "grass": 0.3, "snow": 0.4, "mud": 0.4}
 SURFACE_GAIN = {"stone": 0.6003, "wood": 0.3491, "metal": 0.388, "gravel": 0.4342,
                 "dirt": 0.5001, "grass": 0.2955, "snow": 0.2359, "mud": 0.4493}
+
+
+class MissingSurface(ValueError):
+    """Povrch není vestavěný ani nafitovaný z nahrávek."""
+
+
+def custom_path() -> str:
+    """Soubor nafitovaných povrchů: `<vzorky>/steps/surfaces.json`."""
+    from .library import samples_root
+    return os.path.join(samples_root(), "steps", "surfaces.json")
+
+
+_CUSTOM: dict = {"path": None, "mtime": None, "data": {}}
+
+
+def _custom() -> dict:
+    """Nafitované povrchy `{jméno: záznam}`; čte se znovu, když se soubor změní."""
+    path = custom_path()
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return {}
+    if _CUSTOM["path"] != path or _CUSTOM["mtime"] != mtime:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+        _CUSTOM.update(path=path, mtime=mtime, data=raw)
+    return _CUSTOM["data"]
+
+
+def surface_from_dict(d: dict) -> Surface:
+    """`Surface` ze záznamu JSON (seznamy -> n-tice)."""
+    def tup(v):
+        return tuple(tup(x) for x in v) if isinstance(v, list) else v
+    return Surface(**{k: tup(v) for k, v in d.items()})
+
+
+def lookup(name: str) -> Surface:
+    """Vestavěný povrch, nebo nafitovaný z nahrávek (`samples steps fit`)."""
+    if name in SURFACES:
+        return SURFACES[name]
+    rec = _custom().get(name)
+    if rec is None:
+        raise MissingSurface(
+            f"neznámý povrch {name!r}; k dispozici: {', '.join(surface_names())} — "
+            f"vlastní povrch z nahrávek: python -m paprika samples steps fit "
+            f"<wav...> --name {name} --base <povrch>")
+    return surface_from_dict(rec["surface"])
+
+
+def surface_gain(name: str) -> float:
+    if name in SURFACE_GAIN:
+        return SURFACE_GAIN[name]
+    return float(_custom()[name]["gain"])
+
+
+def surface_names() -> list[str]:
+    return list(SURFACES) + sorted(n for n in _custom() if n not in SURFACES)
+
+
+def apply_eq(y: np.ndarray, sr: int, eq) -> np.ndarray:
+    """Hladká EQ s nulovou fází: zisky `eq` (dB) ve středech pásem
+    `metrics.mel_centers`, mezi nimi lineárně v log frekvenci, za krajními
+    konstantní."""
+    from .metrics import mel_centers
+    g = np.asarray(eq, dtype=np.float64)
+    n = y.size
+    size = 1 << int(np.ceil(np.log2(max(2, 2 * n))))
+    f = np.fft.rfftfreq(size, 1.0 / sr)
+    c = mel_centers(sr)
+    db = np.interp(np.log(np.maximum(f, 1.0)), np.log(c), g)
+    out = np.fft.irfft(np.fft.rfft(y, size) * 10.0 ** (db / 20.0), size)[:n]
+    return out
 
 
 def blend_name(surface) -> tuple[str, str, float]:
@@ -296,6 +373,8 @@ def _render(sr: int, surf: Surface, foot: int, weight: float, speed: float,
     foot_y += _debris(t, sr, surf, force, dforce, ph.contact, level, bright, rng)
     foot_y += _mud(t, sr, surf, ph.contact, speed, rng)
     gear_y = _gear(t, sr, gear, ph.contact, level, speed, rng)
+    if surf.eq is not None:
+        foot_y = apply_eq(foot_y, sr, surf.eq)
     return foot_y * ph.level * level, gear_y
 
 
@@ -308,9 +387,7 @@ def footstep(sr, surface, foot, weight, speed, level, gap, ratio, bright, pitch,
     `ratio`, `bright`, `pitch` jsou korelované násobky z `gait.plan`.
     """
     a_name, b_name, w = blend_name(surface)
-    for name in (a_name, b_name):
-        if name not in SURFACES:
-            raise ValueError(f"neznámý povrch {name!r}; k dispozici: {', '.join(SURFACES)}")
+    surfs = {name: lookup(name) for name in (a_name, b_name)}
     if shoe not in SHOES:
         raise ValueError(f"neznámá bota {shoe!r}; k dispozici: {', '.join(SHOES)}")
     if gear is not None and gear not in GEARS:
@@ -328,8 +405,8 @@ def footstep(sr, surface, foot, weight, speed, level, gap, ratio, bright, pitch,
         if k <= 0.0:
             continue
         rng = np.random.default_rng(29 * 7919 + int(variant) * 31 + len(parts))
-        y, g = _render(sr, SURFACES[name], *args, gear=gear if not parts else None, rng=rng)
-        parts.append((k * SURFACE_GAIN[name] * y, g))
+        y, g = _render(sr, surfs[name], *args, gear=gear if not parts else None, rng=rng)
+        parts.append((k * surface_gain(name) * y, g))
     m = max(p[0].size for p in parts)
     foot_y = np.zeros(m)
     gear_y = np.zeros(m)

@@ -865,9 +865,7 @@ class HumanTrack(SfxTrack):
             if not pts:
                 raise ValueError("steps: surface bez bodů")
         for _, name in pts:
-            if name not in _foley.SURFACES:
-                raise ValueError(f"neznámý povrch {name!r}; k dispozici: "
-                                 f"{', '.join(_foley.SURFACES)}")
+            _foley.lookup(name)        # neznámý -> MissingSurface s návodem
 
         def at(beat: float):
             cur = pts[0][1]
